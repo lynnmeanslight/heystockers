@@ -1,0 +1,30 @@
+{
+  "name": "heystockers-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "npm run typecheck && npm run test",
+    "db:migrate:local": "wrangler d1 migrations apply heystockers --local",
+    "db:migrate:remote": "wrangler d1 migrations apply heystockers --remote --env production",
+    "deploy": "wrangler deploy --env production",
+    "dev": "wrangler dev --local",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "hono": "^4.9.8",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260827.1",
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.33.1"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
+  }
+}

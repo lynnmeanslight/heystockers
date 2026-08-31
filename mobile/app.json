@@ -1,0 +1,62 @@
+{
+  "expo": {
+    "name": "HeyStockers",
+    "slug": "heystockers",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/heystockers-mark.png",
+    "scheme": "heystockers",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/images/heystockers-mark-foreground.png",
+        "monochromeImage": "./assets/images/heystockers-mark-foreground.png"
+      },
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "predictiveBackGestureEnabled": false,
+      "package": "com.heystockers.mobile",
+      "versionCode": 1,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [{ "scheme": "https", "host": "heystockers.trade", "pathPrefix": "/" }],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/heystockers-mark-32.png"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/heystockers-mark-foreground.png",
+          "imageWidth": 120,
+          "resizeMode": "contain",
+          "backgroundColor": "#FFFFFF",
+          "dark": {
+            "backgroundColor": "#FFFFFF"
+          }
+        }
+      ],
+      "expo-web-browser"
+    ],
+    "experiments": {
+      "reactCompiler": true,
+      "typedRoutes": true
+    }
+  }
+}

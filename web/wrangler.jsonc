@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "heystockers",
+  "main": "dist/server/index.js",
+  "compatibility_date": "2026-08-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "no_bundle": true,
+  "observability": { "enabled": true },
+  "assets": {
+    "directory": "dist/client"
+  },
+  "rules": [
+    { "type": "ESModule", "globs": ["**/*.js", "**/*.mjs"] }
+  ],
+  "routes": [
+    { "pattern": "heystockers.trade", "custom_domain": true },
+    { "pattern": "www.heystockers.trade", "custom_domain": true }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "heystockers",
+      "database_id": "5ae67154-750e-45b0-978f-adbae7a86c72"
+    }
+  ]
+}

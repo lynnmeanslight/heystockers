@@ -1,0 +1,7 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>HeyStockers</title>
+  <rect width="32" height="32" rx="7" fill="#000000"/>
+  <rect x="7.25" y="5.75" width="4.75" height="20.5" rx="1.375" fill="#FFFFFF"/>
+  <rect x="20" y="5.75" width="4.75" height="20.5" rx="1.375" fill="#FFFFFF"/>
+  <path d="M11 18.875V14L21 8.875V13.75L11 18.875Z" fill="#FFFFFF"/>
+</svg>

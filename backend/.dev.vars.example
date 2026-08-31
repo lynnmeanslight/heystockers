@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local development. Never commit real values.
+SOLANA_TOKEN_RPC_URL=https://your-token-account-rpc.example
+SOLANA_PROOF_RPC_URL=https://your-general-mainnet-rpc.example
+DFLOW_API_KEY=optional-server-key

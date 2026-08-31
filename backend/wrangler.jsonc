@@ -1,0 +1,54 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "heystockers-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Top-level config is LOCAL DEV ONLY (used by `wrangler dev --local`).
+  // Production is the named `env.production` block below.
+  // Deploy prod with `npm run deploy` (== `wrangler deploy --env production`).
+  // Never run a bare `wrangler deploy` — it would push these dev vars.
+  "vars": {
+    "ENVIRONMENT": "development",
+    "ALLOWED_ORIGINS": "http://localhost:3000",
+    "DFLOW_TRADE_API_URL": "https://dev-quote-api.dflow.net"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "heystockers",
+      // `wrangler dev --local` uses a LOCAL D1, not this id. Placeholder is fine here.
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "env": {
+    "production": {
+      "name": "heystockers-api",
+      "vars": {
+        "ENVIRONMENT": "production",
+        "ALLOWED_ORIGINS": "https://heystockers.trade,https://www.heystockers.trade",
+        // Keyless dev endpoint works but is rate-limited. Before real-user
+        // volume, point this at DFlow's production quote endpoint and add the
+        // DFLOW_API_KEY secret (see README). Kept functional so a first deploy works.
+        "DFLOW_TRADE_API_URL": "https://dev-quote-api.dflow.net"
+      },
+      // Cloudflare auto-creates the DNS record for this custom domain.
+      // Ensure no conflicting CNAME for api.heystockers.trade exists first.
+      "routes": [
+        { "pattern": "api.heystockers.trade", "custom_domain": true }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "heystockers",
+          "database_id": "5ae67154-750e-45b0-978f-adbae7a86c72",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
+  }
+}

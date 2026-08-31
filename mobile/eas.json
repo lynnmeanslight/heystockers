@@ -1,0 +1,40 @@
+{
+  "cli": {
+    "version": ">= 16.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_HEYSTOCKERS_API_URL": "https://api.heystockers.trade",
+        "EXPO_PUBLIC_SOLANA_RPC_URL": "https://api.mainnet-beta.solana.com"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "dapp-store": {
+      "distribution": "store",
+      "env": {
+        "EXPO_PUBLIC_HEYSTOCKERS_API_URL": "https://api.heystockers.trade",
+        "EXPO_PUBLIC_SOLANA_RPC_URL": "https://api.mainnet-beta.solana.com"
+      },
+      "android": {
+        "buildType": "apk",
+        "credentialsSource": "remote"
+      }
+    }
+  }
+}
