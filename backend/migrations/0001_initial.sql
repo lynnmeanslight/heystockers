@@ -35,14 +35,14 @@ CREATE TABLE IF NOT EXISTS follows (
 CREATE TABLE IF NOT EXISTS position_calls (
   id TEXT PRIMARY KEY,
   wallet TEXT NOT NULL,
-  symbol TEXT NOT NULL CHECK (symbol IN ('NVDAx', 'AAPLx', 'SPYx', 'TSLAx')),
+  symbol TEXT NOT NULL,
   side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
   thesis TEXT NOT NULL CHECK (length(thesis) BETWEEN 10 AND 280),
   entry_price REAL NOT NULL CHECK (entry_price > 0),
   target_price REAL NOT NULL CHECK (target_price > 0),
   deadline TEXT NOT NULL,
   commitment_usdc REAL NOT NULL CHECK (commitment_usdc BETWEEN 1 AND 25),
-  execution_signature TEXT NOT NULL UNIQUE,
+  execution_signature TEXT,
   outcome TEXT NOT NULL DEFAULT 'OPEN' CHECK (outcome IN ('OPEN', 'WON', 'LOST')),
   resolved_at TEXT,
   resolved_price REAL,
@@ -63,4 +63,6 @@ CREATE INDEX IF NOT EXISTS idx_follows_follower_wallet ON follows(follower_walle
 CREATE INDEX IF NOT EXISTS idx_position_calls_created_at ON position_calls(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_position_calls_outcome_deadline ON position_calls(outcome, deadline);
 CREATE INDEX IF NOT EXISTS idx_position_calls_wallet_created_at ON position_calls(wallet, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_position_calls_proven_created_at ON position_calls(created_at DESC) WHERE execution_signature IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_position_calls_execution_signature ON position_calls(execution_signature) WHERE execution_signature IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_call_signals_call_id ON call_signals(call_id);

@@ -24,6 +24,18 @@ npm run dev
 
 The Worker starts on `http://localhost:8787`. Check `GET /health` and `GET /ready`.
 
+## MagicBlock compatibility probe
+
+Run the read-only mainnet quote matrix without building, signing, or submitting transactions:
+
+```bash
+npm run probe:magicblock
+```
+
+Set `MAGICBLOCK_API_URL` to test another compatible endpoint. The command checks every supported USDC/xStock pair in both directions and exits unsuccessfully when no asset works in both directions. It does not change the production DFlow order route.
+
+As of September 1, 2026, `https://payments.magicblock.app/health` returns 200, but the documented `GET /v1/swap/quote` returns HTTP 405 with a Solana JSON-RPC `Bad method` response and an `x-rpc-node` header. This indicates an upstream routing mismatch. MagicBlock trading must remain disabled until the documented REST quote endpoint returns valid quotes and the full matrix is rerun.
+
 ## Production setup
 
 Production is a named Wrangler environment (`env.production` in `wrangler.jsonc`). Top-level config is local dev only. Every production command below carries `--env production`.

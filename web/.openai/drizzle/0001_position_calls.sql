@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS position_calls (
   id TEXT PRIMARY KEY,
   wallet TEXT NOT NULL,
-  symbol TEXT NOT NULL CHECK (symbol IN ('NVDAx', 'AAPLx', 'SPYx', 'TSLAx')),
+  symbol TEXT NOT NULL,
   side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
   thesis TEXT NOT NULL CHECK (length(thesis) BETWEEN 10 AND 280),
   entry_price REAL NOT NULL CHECK (entry_price > 0),

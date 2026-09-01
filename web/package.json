@@ -9,7 +9,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "build:production": "NEXT_PUBLIC_SITE_URL=https://heystockers.trade NEXT_PUBLIC_HEYSTOCKERS_API_URL=https://api.heystockers.trade vinext build",
-    "deploy": "npm run build:production && wrangler deploy --config wrangler.jsonc",
+    "deploy": "npm run build:production && node scripts/add-worker-shell.mjs && wrangler deploy --config wrangler.jsonc",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test": "node --test tests/*.test.ts"

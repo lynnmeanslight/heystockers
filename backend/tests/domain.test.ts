@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { targetMatchesSide } from '../src/position-calls'
 import { clearRateLimits, takeRateLimit } from '../src/rate-limit'
 import { allowedOrigin } from '../src/security'
-import { matchesPositionTrade } from '../src/solana'
+import { matchesPositionTrade, parseSupportedTrade } from '../src/solana'
 import { TRADE_ASSETS } from '../src/assets'
 import { summarizeMarkets } from '../src/market'
 
@@ -45,6 +45,26 @@ describe('position calls', () => {
     expect(matchesPositionTrade(transaction, wallet, { assetMint, side: 'BUY', commitmentUsdc: 10 })).toBe(true)
     expect(matchesPositionTrade(transaction, wallet, { assetMint, side: 'SELL', commitmentUsdc: 10 })).toBe(false)
     expect(matchesPositionTrade(transaction, wallet, { assetMint, side: 'BUY', commitmentUsdc: 20 })).toBe(false)
+  })
+
+  it('parses supported stock swaps into recorded trades', () => {
+    const wallet = '8dZZqYCJdyk9XJG3WaaphpLRgzoC9bEMu3nncmEKMcf1'
+    const asset = TRADE_ASSETS[0]
+    const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+    const balance = (owner: string, mint: string, amount: string) => ({ owner, mint, uiTokenAmount: { amount } })
+    const buy = {
+      meta: {
+        preTokenBalances: [balance(wallet, usdcMint, '20000000'), balance(wallet, asset.mint, '0')],
+        postTokenBalances: [balance(wallet, usdcMint, '10000000'), balance(wallet, asset.mint, String(10 ** asset.decimals))],
+      },
+    }
+    const parsed = parseSupportedTrade(buy, wallet)
+    expect(parsed?.symbol).toBe(asset.symbol)
+    expect(parsed?.side).toBe('BUY')
+    expect(parsed?.usdcAtomic).toBe('10000000')
+    expect(parsed?.priceUsd).toBe(10)
+    expect(parseSupportedTrade({ meta: { ...buy.meta, err: { failed: true } } }, wallet)).toBeNull()
+    expect(parseSupportedTrade(buy, 'DifferentWallet1111111111111111111111111111')).toBeNull()
   })
 })
 

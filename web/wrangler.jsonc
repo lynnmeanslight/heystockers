@@ -1,7 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "heystockers",
-  "main": "dist/server/index.js",
+  // worker-shell wraps vinext's entry to enforce security headers (see scripts/add-worker-shell.mjs).
+  "main": "dist/server/worker-shell.js",
   "compatibility_date": "2026-08-26",
   "compatibility_flags": ["nodejs_compat"],
   "no_bundle": true,

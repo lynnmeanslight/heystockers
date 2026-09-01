@@ -9,6 +9,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply heystockers --remote --env production",
     "deploy": "wrangler deploy --env production",
     "dev": "wrangler dev --local",
+    "probe:magicblock": "tsx scripts/probe-magicblock.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260827.1",
     "@types/node": "^24.3.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",
     "wrangler": "^4.33.1"

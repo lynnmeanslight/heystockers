@@ -5,6 +5,8 @@
   "compatibility_date": "2026-08-28",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Settles open position calls and purges expired sessions/challenges.
+  "triggers": { "crons": ["* * * * *"] },
 
   // Top-level config is LOCAL DEV ONLY (used by `wrangler dev --local`).
   // Production is the named `env.production` block below.
@@ -28,6 +30,7 @@
   "env": {
     "production": {
       "name": "heystockers-api",
+      "triggers": { "crons": ["* * * * *"] },
       "vars": {
         "ENVIRONMENT": "production",
         "ALLOWED_ORIGINS": "https://heystockers.trade,https://www.heystockers.trade",

@@ -17,13 +17,26 @@ export async function authenticatedWallet(db: D1Database, authorization: string 
   return row?.wallet ?? null
 }
 
-export async function createChallenge(db: D1Database, wallet: string) {
+// Binding the domain into the signed message lets users spot a phishing site
+// relaying our challenge: the wallet popup shows a domain that is not the one
+// in their address bar.
+export function challengeDomain(origin: string | undefined, configuredOrigins: string | undefined) {
+  const candidate = origin ?? (configuredOrigins ?? '').split(',').map((value) => value.trim()).find(Boolean) ?? ''
+  try {
+    return new URL(candidate).host
+  } catch {
+    return 'heystockers.trade'
+  }
+}
+
+export async function createChallenge(db: D1Database, wallet: string, domain = 'heystockers.trade') {
   if (!WALLET_PATTERN.test(wallet)) throw new Response(JSON.stringify({ error: 'Wallet address is not valid.' }), { status: 400 })
   const challengeId = crypto.randomUUID()
   const createdAt = new Date()
   const expiresAt = new Date(createdAt.getTime() + 5 * 60_000)
   const message = [
     'HeyStockers Stock SocialFi',
+    `Domain: ${domain}`,
     `Wallet: ${wallet}`,
     `Challenge: ${challengeId}`,
     `Expires: ${expiresAt.toISOString()}`,
@@ -67,6 +80,18 @@ export async function verifyChallenge(db: D1Database, body: { wallet?: string; c
   await db.batch([
     db.prepare('INSERT INTO wallets (wallet, joined_at) VALUES (?, ?) ON CONFLICT(wallet) DO NOTHING').bind(wallet, now.toISOString()),
     db.prepare('INSERT INTO sessions (token_hash, wallet, expires_at, created_at) VALUES (?, ?, ?, ?)').bind(tokenHash, wallet, sessionExpiry, now.toISOString()),
+    // Cap live sessions per wallet so a signing loop cannot grow the table.
+    db.prepare(
+      `DELETE FROM sessions WHERE wallet = ?1 AND (expires_at <= ?2 OR token_hash NOT IN (
+         SELECT token_hash FROM sessions WHERE wallet = ?1 ORDER BY created_at DESC LIMIT 5))`,
+    ).bind(wallet, now.toISOString()),
   ])
   return { token, wallet, expiresAt: sessionExpiry }
+}
+
+export async function revokeSession(db: D1Database, authorization: string | undefined) {
+  const token = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : ''
+  if (!token) return false
+  const result = await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await hashToken(token)).run()
+  return result.meta.changes > 0
 }

@@ -1,7 +1,7 @@
 import { TRADE_ASSETS } from './assets';
 
-type MarketSnapshot = { prices: Record<string, number | null>; volumes: Record<string, number>; expiresAt: number };
-type DexPair = { pairAddress?: string; baseToken?: { address?: string }; priceUsd?: string | null; volume?: { h24?: number }; liquidity?: { usd?: number } | null };
+type MarketSnapshot = { prices: Record<string, number | null>; changes: Record<string, number | null>; volumes: Record<string, number>; expiresAt: number };
+type DexPair = { pairAddress?: string; baseToken?: { address?: string }; priceUsd?: string | null; priceChange?: { h24?: number } | null; volume?: { h24?: number }; liquidity?: { usd?: number } | null };
 let marketCache: MarketSnapshot | null = null;
 let marketInFlight: Promise<MarketSnapshot> | null = null;
 
@@ -14,7 +14,7 @@ export async function getStockMarket() {
   if (marketInFlight) return marketInFlight;
   marketInFlight = (async () => {
     try {
-      const markets = new Map(TRADE_ASSETS.map((asset) => [asset.mint, { price: null as number | null, volume: 0, liquidity: -1, pairs: new Set<string>() }]));
+      const markets = new Map(TRADE_ASSETS.map((asset) => [asset.mint, { price: null as number | null, change: null as number | null, volume: 0, liquidity: -1, pairs: new Set<string>() }]));
       const groups = await Promise.all(chunks(TRADE_ASSETS, 30).map(async (assets) => {
         const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${assets.map((asset) => asset.mint).join(',')}`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
         if (!response.ok) throw new Error('Solana market data rejected');
@@ -28,16 +28,22 @@ export async function getStockMarket() {
         market.volume += Number(pair.volume?.h24) || 0;
         const liquidity = Number(pair.liquidity?.usd) || 0;
         const price = Number(pair.priceUsd);
-        if (price > 0 && liquidity > market.liquidity) { market.price = price; market.liquidity = liquidity; }
+        if (price > 0 && liquidity > market.liquidity) {
+          market.price = price;
+          market.change = Number.isFinite(Number(pair.priceChange?.h24)) ? Number(pair.priceChange?.h24) : null;
+          market.liquidity = liquidity;
+        }
       }
       marketCache = {
         prices: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, markets.get(asset.mint)?.price ?? null])),
+        changes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, markets.get(asset.mint)?.change ?? null])),
         volumes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, markets.get(asset.mint)?.volume ?? 0])),
-        expiresAt: Date.now() + 60_000,
+        expiresAt: Date.now() + 15_000,
       };
     } catch {
       marketCache = {
         prices: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, null])),
+        changes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, null])),
         volumes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, asset.volume24h])),
         expiresAt: Date.now() + 15_000,
       };

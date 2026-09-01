@@ -101,6 +101,21 @@ export async function searchProfiles(db: D1Database, rawQuery: string, viewer = 
   return result.results.map((row) => publicProfile(row)!)
 }
 
+export async function listConnections(db: D1Database, wallet: string, viewer = '') {
+  const [followers, following] = await Promise.all([
+    db.prepare(
+      `${PROFILE_SELECT} JOIN follows f ON f.follower_wallet = p.wallet WHERE f.following_wallet = ? ORDER BY f.created_at DESC LIMIT 50`,
+    ).bind(viewer, wallet).all<ProfileRow>(),
+    db.prepare(
+      `${PROFILE_SELECT} JOIN follows f ON f.following_wallet = p.wallet WHERE f.follower_wallet = ? ORDER BY f.created_at DESC LIMIT 50`,
+    ).bind(viewer, wallet).all<ProfileRow>(),
+  ])
+  return {
+    followers: followers.results.map((row) => publicProfile(row)!),
+    following: following.results.map((row) => publicProfile(row)!),
+  }
+}
+
 export async function saveProfile(db: D1Database, wallet: string, rawUsername: string, rawReferralCode = '') {
   const username = normalizeUsername(rawUsername)
   const validationError = usernameError(username)

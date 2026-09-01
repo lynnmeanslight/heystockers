@@ -21,7 +21,7 @@ export const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS posts (
     id TEXT PRIMARY KEY,
     wallet TEXT NOT NULL,
-    symbol TEXT NOT NULL CHECK (symbol IN ('NVDAx', 'AAPLx', 'SPYx', 'TSLAx')),
+    symbol TEXT NOT NULL,
     stance TEXT NOT NULL CHECK (stance IN ('BUY', 'HOLD', 'SELL')),
     thesis TEXT NOT NULL CHECK (length(thesis) BETWEEN 10 AND 280),
     conviction INTEGER NOT NULL CHECK (conviction BETWEEN 1 AND 5),

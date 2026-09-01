@@ -1,8 +1,8 @@
 import { TRADE_ASSETS, USDC } from './assets'
 import type { Bindings } from './types'
 
-type MarketSnapshot = { prices: Record<string, number | null>; volumes: Record<string, number>; expiresAt: number }
-type DexPair = { pairAddress?: string; baseToken?: { address?: string }; priceUsd?: string | null; volume?: { h24?: number }; liquidity?: { usd?: number } | null }
+type MarketSnapshot = { prices: Record<string, number | null>; changes: Record<string, number | null>; volumes: Record<string, number>; expiresAt: number }
+type DexPair = { pairAddress?: string; baseToken?: { address?: string }; priceUsd?: string | null; priceChange?: { h24?: number } | null; volume?: { h24?: number }; liquidity?: { usd?: number } | null }
 
 let marketCache: MarketSnapshot | null = null
 let marketInFlight: Promise<MarketSnapshot> | null = null
@@ -22,7 +22,7 @@ function tradeHeaders(env: Bindings) {
 }
 
 export function summarizeMarkets(pairGroups: DexPair[][]) {
-  const markets = new Map(TRADE_ASSETS.map((asset) => [asset.mint, { price: null as number | null, volume: 0, liquidity: -1, pairs: new Set<string>() }]))
+  const markets = new Map(TRADE_ASSETS.map((asset) => [asset.mint, { price: null as number | null, change: null as number | null, volume: 0, liquidity: -1, pairs: new Set<string>() }]))
   for (const pairs of pairGroups) for (const pair of pairs) {
     const mint = pair.baseToken?.address
     const market = mint ? markets.get(mint) : undefined
@@ -34,11 +34,13 @@ export function summarizeMarkets(pairGroups: DexPair[][]) {
     const price = Number(pair.priceUsd)
     if (price > 0 && liquidity > market.liquidity) {
       market.price = price
+      market.change = Number.isFinite(Number(pair.priceChange?.h24)) ? Number(pair.priceChange?.h24) : null
       market.liquidity = liquidity
     }
   }
   return {
     prices: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, markets.get(asset.mint)?.price ?? null])) as Record<string, number | null>,
+    changes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, markets.get(asset.mint)?.change ?? null])) as Record<string, number | null>,
     volumes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, markets.get(asset.mint)?.volume ?? 0])) as Record<string, number>,
   }
 }
@@ -49,18 +51,26 @@ export async function getStockMarket() {
   marketInFlight = (async () => {
     try {
       const pairGroups = await Promise.all(chunks(TRADE_ASSETS, 30).map(async (assets) => {
-        const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${assets.map((asset) => asset.mint).join(',')}`, { headers: { Accept: 'application/json' } })
+        const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${assets.map((asset) => asset.mint).join(',')}`, {
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(8_000),
+        })
         if (!response.ok) throw new Error('Solana market data rejected')
         return response.json<DexPair[]>()
       }))
       const market = summarizeMarkets(pairGroups)
-      marketCache = { ...market, expiresAt: Date.now() + 60_000 }
+      marketCache = { ...market, expiresAt: Date.now() + 15_000 }
     } catch {
-      marketCache = {
-        prices: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, null])),
-        volumes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, asset.volume24h])),
-        expiresAt: Date.now() + 15_000,
-      }
+      // Serve the last good snapshot as stale data instead of nulling every
+      // price for a transient upstream failure.
+      marketCache = marketCache
+        ? { ...marketCache, expiresAt: Date.now() + 15_000 }
+        : {
+            prices: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, null])),
+            changes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, null])),
+            volumes: Object.fromEntries(TRADE_ASSETS.map((asset) => [asset.symbol, asset.volume24h])),
+            expiresAt: Date.now() + 15_000,
+          }
     } finally {
       marketInFlight = null
     }
@@ -89,5 +99,5 @@ export async function buildOrder(env: Bindings, input: { inputMint: string; outp
     prioritizationFeeLamports: 'auto',
   })
   if (input.userPublicKey) params.set('userPublicKey', input.userPublicKey)
-  return fetch(`${tradeBaseUrl(env)}/order?${params}`, { headers: tradeHeaders(env) })
+  return fetch(`${tradeBaseUrl(env)}/order?${params}`, { headers: tradeHeaders(env), signal: AbortSignal.timeout(10_000) })
 }

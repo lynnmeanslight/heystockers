@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const STEPS = [
   { title: 'Connect your wallet.', body: 'HeyStockers reads only your USDC and supported stock balances. Nothing moves until you approve a transaction.' },
@@ -13,6 +13,19 @@ type Props = { open: boolean; onClose(): void };
 
 export function OnboardingGuide({ open, onClose }: Props) {
   const [step, setStep] = useState(0);
+  const dialogRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    dialogRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setStep(0);
+      onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -24,7 +37,7 @@ export function OnboardingGuide({ open, onClose }: Props) {
   }
   return (
     <div className="guide-backdrop" role="presentation">
-      <section className="guide-dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+      <section ref={dialogRef} tabIndex={-1} className="guide-dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title">
         <div className="guide-topline"><span>GUIDE · {step + 1}/{STEPS.length}</span><button type="button" onClick={close} aria-label="Close user guide">×</button></div>
         <div className="guide-progress" aria-hidden="true">{STEPS.map((_, index) => <i className={index <= step ? 'active' : ''} key={index} />)}</div>
         <h2 id="guide-title">{current.title}</h2>

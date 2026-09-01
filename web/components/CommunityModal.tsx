@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { apiUrl } from '../lib/api';
 
 export type UserProfile = {
@@ -32,6 +32,38 @@ export function CommunityModal({ open, walletAddress, profile, referralCode, onC
   const [saving, setSaving] = useState(false);
   const [searching, setSearching] = useState(false);
   const [message, setMessage] = useState('');
+  const [connections, setConnections] = useState<{ followers: UserProfile[]; following: UserProfile[] } | null>(null);
+  const [connectionsStatus, setConnectionsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(profile ? 'loading' : 'idle');
+  const [connectionsView, setConnectionsView] = useState<'followers' | 'following'>('followers');
+  const dialogRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    dialogRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  const profileWallet = profile?.wallet ?? '';
+  useEffect(() => {
+    if (!open || !profileWallet) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const params = new URLSearchParams({ wallet: profileWallet, viewer: walletAddress || profileWallet });
+        const response = await fetch(apiUrl(`/api/profiles/connections?${params.toString()}`), { cache: 'no-store', signal: controller.signal });
+        const payload = await response.json() as { followers?: UserProfile[]; following?: UserProfile[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Connections are unavailable.');
+        setConnections({ followers: payload.followers ?? [], following: payload.following ?? [] });
+        setConnectionsStatus('ready');
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setConnectionsStatus('error');
+      }
+    })();
+    return () => controller.abort();
+  }, [open, profileWallet, walletAddress]);
 
   if (!open) return null;
 
@@ -81,6 +113,18 @@ export function CommunityModal({ open, walletAddress, profile, referralCode, onC
     try {
       const following = await onFollow(candidate.wallet);
       setResults((current) => current.map((item) => item.wallet === candidate.wallet ? { ...item, following } : item));
+      setConnections((current) => {
+        if (!current) return current;
+        const updatedCandidate = { ...candidate, following };
+        return {
+          followers: current.followers.map((item) => item.wallet === candidate.wallet ? { ...item, following } : item),
+          following: following
+            ? current.following.some((item) => item.wallet === candidate.wallet)
+              ? current.following.map((item) => item.wallet === candidate.wallet ? updatedCandidate : item)
+              : [updatedCandidate, ...current.following]
+            : current.following.filter((item) => item.wallet !== candidate.wallet),
+        };
+      });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Follow could not be updated.');
     }
@@ -88,7 +132,7 @@ export function CommunityModal({ open, walletAddress, profile, referralCode, onC
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="community-modal" role="dialog" aria-modal="true" aria-labelledby="community-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="community-modal" role="dialog" aria-modal="true" aria-labelledby="community-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-topline"><span>COMMUNITY</span><button type="button" onClick={onClose} aria-label="Close community">×</button></div>
         <h2 id="community-title">{profile ? `@${profile.username}` : 'Find your people.'}</h2>
 
@@ -110,6 +154,29 @@ export function CommunityModal({ open, walletAddress, profile, referralCode, onC
             <div><strong>{profile.followerCount}</strong><span>FOLLOWERS</span></div>
             <div><strong>{profile.wins}W–{profile.losses}L</strong><span>RECORD</span></div>
             <button type="button" onClick={copyInvite}>COPY INVITE</button>
+          </div>
+        )}
+
+        {profile && (
+          <div className="connections">
+            <div className="sub-switch" role="tablist" aria-label="Your connections">
+              <button type="button" role="tab" aria-selected={connectionsView === 'followers'} className={connectionsView === 'followers' ? 'active' : ''} onClick={() => setConnectionsView('followers')}>Followers ({profile.followerCount})</button>
+              <button type="button" role="tab" aria-selected={connectionsView === 'following'} className={connectionsView === 'following' ? 'active' : ''} onClick={() => setConnectionsView('following')}>Following ({profile.followingCount})</button>
+            </div>
+            <div className="people-results">
+              {connectionsStatus === 'loading' && <p className="community-note" role="status">Loading connections…</p>}
+              {connectionsStatus === 'error' && <p className="community-note" role="alert">Connections could not be loaded. Try reopening Community.</p>}
+              {connectionsStatus === 'ready' && connections && (connectionsView === 'followers' ? connections.followers : connections.following).length === 0 && (
+                <p className="community-note">{connectionsView === 'followers' ? 'No followers yet. Publish verified calls to earn them.' : 'You are not following anyone yet. Find traders below.'}</p>
+              )}
+              {connectionsStatus === 'ready' && connections && (connectionsView === 'followers' ? connections.followers : connections.following).map((candidate) => (
+                <article key={candidate.wallet}>
+                  <span className="profile-initial">{candidate.username.slice(0, 1).toUpperCase()}</span>
+                  <span><b>@{candidate.username}</b><small>{candidate.wins}W–{candidate.losses}L · {candidate.followerCount} followers</small></span>
+                  {candidate.wallet !== walletAddress && <button type="button" onClick={() => follow(candidate)}>{candidate.following ? 'FOLLOWING' : 'FOLLOW'}</button>}
+                </article>
+              ))}
+            </div>
           </div>
         )}
 

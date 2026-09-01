@@ -23,15 +23,39 @@ async function tokenAccounts(env: Bindings, wallet: string, programId: string) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: programId === legacyTokenProgram ? 'legacy' : 'token-2022', method: 'getTokenAccountsByOwner', params: [wallet, { programId }, { commitment: 'confirmed', encoding: 'jsonParsed' }] }),
+    signal: AbortSignal.timeout(10_000),
   })
   const body = await response.json<{ result?: { value: ParsedTokenAccount[] }; error?: { message?: string } }>()
   if (!response.ok || body.error || !body.result) throw new Error('Token-account RPC failed')
   return body.result.value
 }
 
-export async function getPortfolio(env: Bindings, wallet: string) {
-  const cached = portfolioCache.get(wallet)
-  if (cached && cached.expiresAt > Date.now()) return { payload: cached.value, cache: 'hit' as const }
+// Balances are public chain state, so a shared per-PoP cache keyed by wallet is
+// safe and spares the paid RPC when other isolates read the same wallet.
+function portfolioCacheKey(wallet: string) {
+  return new Request(`https://portfolio-cache.heystockers.internal/${wallet}`)
+}
+
+async function sharedCache() {
+  try {
+    return (globalThis as { caches?: { default?: Cache } }).caches?.default ?? null
+  } catch {
+    return null
+  }
+}
+
+export async function getPortfolio(env: Bindings, wallet: string, options: { fresh?: boolean } = {}) {
+  if (!options.fresh) {
+    const cached = portfolioCache.get(wallet)
+    if (cached && cached.expiresAt > Date.now()) return { payload: cached.value, cache: 'hit' as const }
+    const edge = await sharedCache()
+    const match = edge ? await edge.match(portfolioCacheKey(wallet)).catch(() => null) : null
+    if (match) {
+      const value = await match.json<object>()
+      portfolioCache.set(wallet, { value, expiresAt: Date.now() + 10_000 })
+      return { payload: value, cache: 'edge' as const }
+    }
+  }
   const [legacy, token2022, prices] = await Promise.all([
     tokenAccounts(env, wallet, legacyTokenProgram),
     tokenAccounts(env, wallet, token2022Program),
@@ -63,6 +87,12 @@ export async function getPortfolio(env: Bindings, wallet: string) {
     rpcCalls: { tokenAccounts: 2 },
   }
   portfolioCache.set(wallet, { value: payload, expiresAt: Date.now() + 30_000 })
+  const edge = await sharedCache()
+  if (edge) {
+    await edge.put(portfolioCacheKey(wallet), new Response(JSON.stringify(payload), {
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'max-age=30' },
+    })).catch(() => undefined)
+  }
   return { payload, cache: 'miss' as const }
 }
 
@@ -83,23 +113,61 @@ export function matchesPositionTrade(transaction: ParsedTransaction, wallet: str
     : assetDelta < 0n && usdcDelta > 0n && usdcDelta >= minimum
 }
 
-export async function verifyTrade(env: Bindings, signature: string, wallet: string, request: { assetMint: string; side: PositionSide; commitmentUsdc: number }) {
+export type ParsedSupportedTrade = { symbol: string; side: PositionSide; assetAtomic: string; usdcAtomic: string; priceUsd: number | null }
+
+// Derives which supported stock the wallet swapped against USDC from the
+// transaction's balance deltas; returns null for anything else.
+export function parseSupportedTrade(transaction: ParsedTransaction, wallet: string): ParsedSupportedTrade | null {
+  if (transaction.meta?.err) return null
+  const pre = transaction.meta?.preTokenBalances ?? []
+  const post = transaction.meta?.postTokenBalances ?? []
+  const usdcDelta = atomicBalance(post, wallet, USDC.mint) - atomicBalance(pre, wallet, USDC.mint)
+  if (usdcDelta === 0n) return null
+  for (const asset of TRADE_ASSETS) {
+    const assetDelta = atomicBalance(post, wallet, asset.mint) - atomicBalance(pre, wallet, asset.mint)
+    if (assetDelta === 0n) continue
+    if (assetDelta > 0n === usdcDelta > 0n) continue
+    const assetAbs = assetDelta < 0n ? -assetDelta : assetDelta
+    const usdcAbs = usdcDelta < 0n ? -usdcDelta : usdcDelta
+    const assetUnits = Number(assetAbs) / 10 ** asset.decimals
+    return {
+      symbol: asset.symbol,
+      side: assetDelta > 0n ? 'BUY' : 'SELL',
+      assetAtomic: assetAbs.toString(),
+      usdcAtomic: usdcAbs.toString(),
+      priceUsd: assetUnits > 0 ? Number(usdcAbs) / 1_000_000 / assetUnits : null,
+    }
+  }
+  return null
+}
+
+export function transactionSignedBy(transaction: ParsedTransaction, wallet: string) {
+  const keys = transaction.transaction?.message?.accountKeys ?? []
+  return keys.some((key, index) => typeof key === 'string' ? index === 0 && key === wallet : key.pubkey === wallet && key.signer === true)
+}
+
+export async function getParsedTransaction(env: Bindings, signature: string) {
   if (!env.SOLANA_PROOF_RPC_URL) throw new Error('Proof RPC is not configured')
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const response = await fetch(env.SOLANA_PROOF_RPC_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 'trade-proof', method: 'getTransaction', params: [signature, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }] }),
+      signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) throw new Error('Proof RPC failed')
     const body = await response.json<{ result?: ParsedTransaction | null }>()
-    if (!body.result) {
-      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 600))
-      continue
-    }
-    const keys = body.result.transaction?.message?.accountKeys ?? []
-    const signed = keys.some((key, index) => typeof key === 'string' ? index === 0 && key === wallet : key.pubkey === wallet && key.signer === true)
-    return { valid: signed && matchesPositionTrade(body.result, wallet, request), blockTime: body.result.blockTime ?? null }
+    if (body.result) return body.result
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 600))
   }
-  return { valid: false, blockTime: null }
+  return null
+}
+
+export async function verifyTrade(env: Bindings, signature: string, wallet: string, request: { assetMint: string; side: PositionSide; commitmentUsdc: number }) {
+  const transaction = await getParsedTransaction(env, signature)
+  if (!transaction) return { valid: false, blockTime: null }
+  return {
+    valid: transactionSignedBy(transaction, wallet) && matchesPositionTrade(transaction, wallet, request),
+    blockTime: transaction.blockTime ?? null,
+  }
 }

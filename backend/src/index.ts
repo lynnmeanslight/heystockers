@@ -1,12 +1,13 @@
 import { Hono, type Context } from 'hono'
-import { authenticatedWallet, createChallenge, verifyChallenge } from './auth'
+import { authenticatedWallet, challengeDomain, createChallenge, revokeSession, verifyChallenge } from './auth'
 import { SIGNATURE_PATTERN, TRADE_ASSETS, WALLET_PATTERN } from './assets'
 import { buildOrder, getStockMarket, getStockPrices } from './market'
-import { positionProgress, settlePositionCall, targetMatchesSide, type PositionOutcome, type PositionSide } from './position-calls'
-import { deleteAccountData, getProfileByWallet, profileExists, ProfileError, saveProfile, searchProfiles } from './profiles'
-import { takeRateLimit } from './rate-limit'
+import { positionProgress, targetMatchesSide, type PositionOutcome, type PositionSide } from './position-calls'
+import { deleteAccountData, getProfileByWallet, listConnections, profileExists, ProfileError, saveProfile, searchProfiles } from './profiles'
+import { takeDurableRateLimit, takeRateLimit } from './rate-limit'
 import { allowedOrigin } from './security'
-import { getPortfolio, verifyTrade } from './solana'
+import { purgeExpiredRows, settleOpenCalls } from './settlement'
+import { getParsedTransaction, getPortfolio, parseSupportedTrade, transactionSignedBy, verifyTrade } from './solana'
 import type { Bindings, Variables } from './types'
 
 type AppEnv = { Bindings: Bindings; Variables: Variables }
@@ -46,8 +47,26 @@ function limit(c: AppContext, scope: string, maximum: number, windowMs = 60_000)
   return c.json({ error: 'Too many requests. Try again shortly.' }, 429)
 }
 
+// Shared D1-backed limit for sensitive routes; survives isolate churn.
+async function limitDurable(c: AppContext, scope: string, maximum: number, windowMs = 60_000) {
+  const result = await takeDurableRateLimit(c.env.DB, `${scope}:${clientKey(c)}`, maximum, windowMs)
+  c.header('X-RateLimit-Remaining', String(result.remaining))
+  if (result.allowed) return null
+  c.header('Retry-After', String(result.retryAfter))
+  return c.json({ error: 'Too many requests. Try again shortly.' }, 429)
+}
+
 async function jsonBody<T>(c: AppContext) {
   return c.req.json<T>().catch(() => ({} as T))
+}
+
+async function upstreamOrderError(upstream: Response) {
+  try {
+    const parsed = JSON.parse((await upstream.text()).slice(0, 500)) as { error?: unknown; msg?: unknown }
+    const candidate = [parsed.error, parsed.msg].find((value) => typeof value === 'string' && value.trim())
+    if (typeof candidate === 'string') return candidate.slice(0, 200)
+  } catch { /* non-JSON upstream body */ }
+  return 'Live execution is temporarily unavailable. No order was created.'
 }
 
 function thrownResponse(error: unknown) {
@@ -83,11 +102,12 @@ app.get('/ready', async (c) => {
 })
 
 app.post('/api/auth/challenge', async (c) => {
-  const blocked = limit(c, 'challenge', 10)
+  const blocked = await limitDurable(c, 'challenge', 10)
   if (blocked) return blocked
   const body = await jsonBody<{ wallet?: string }>(c)
   try {
-    const payload = await createChallenge(c.env.DB, body.wallet?.trim() ?? '')
+    const domain = challengeDomain(c.req.header('Origin'), c.env.ALLOWED_ORIGINS)
+    const payload = await createChallenge(c.env.DB, body.wallet?.trim() ?? '', domain)
     c.header('Cache-Control', 'no-store')
     return c.json(payload)
   } catch (error) {
@@ -98,7 +118,7 @@ app.post('/api/auth/challenge', async (c) => {
 })
 
 app.post('/api/auth/verify', async (c) => {
-  const blocked = limit(c, 'verify', 15)
+  const blocked = await limitDurable(c, 'verify', 15)
   if (blocked) return blocked
   try {
     const payload = await verifyChallenge(c.env.DB, await jsonBody(c))
@@ -109,6 +129,12 @@ app.post('/api/auth/verify', async (c) => {
     if (response) return response
     throw error
   }
+})
+
+app.post('/api/auth/logout', async (c) => {
+  const revoked = await revokeSession(c.env.DB, c.req.header('Authorization'))
+  c.header('Cache-Control', 'no-store')
+  return c.json({ revoked })
 })
 
 app.get('/api/profiles/by-wallet', async (c) => {
@@ -129,6 +155,18 @@ app.get('/api/profiles/search', async (c) => {
   const profiles = await searchProfiles(c.env.DB, c.req.query('q') ?? '', viewer)
   c.header('Cache-Control', 'no-store')
   return c.json({ profiles })
+})
+
+app.get('/api/profiles/connections', async (c) => {
+  const blocked = limit(c, 'connections', 40)
+  if (blocked) return blocked
+  const wallet = c.req.query('wallet') ?? ''
+  if (!WALLET_PATTERN.test(wallet)) return c.json({ error: 'Wallet address is not valid.' }, 400)
+  const viewerCandidate = c.req.query('viewer') ?? ''
+  const viewer = WALLET_PATTERN.test(viewerCandidate) ? viewerCandidate : ''
+  const connections = await listConnections(c.env.DB, wallet, viewer)
+  c.header('Cache-Control', 'no-store')
+  return c.json(connections)
 })
 
 app.post('/api/profiles', async (c) => {
@@ -154,16 +192,21 @@ app.delete('/api/profiles', async (c) => {
 })
 
 app.get('/api/stocks/quotes', async (c) => {
-  const { prices, volumes } = await getStockMarket()
-  c.header('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=120')
-  return c.json({ prices, volumes, updatedAt: new Date().toISOString(), source: 'Solana market activity' })
+  const { prices, changes, volumes } = await getStockMarket()
+  c.header('Cache-Control', 'public, max-age=10, s-maxage=15, stale-while-revalidate=30')
+  return c.json({ prices, changes, volumes, updatedAt: new Date().toISOString(), source: 'Solana market activity' })
 })
 
 app.get('/api/portfolio', async (c) => {
   const wallet = c.req.query('wallet') ?? ''
   if (!WALLET_PATTERN.test(wallet)) return c.json({ error: 'Wallet address is not valid.' }, 400)
+  const fresh = c.req.query('fresh') === '1'
+  if (fresh) {
+    const blocked = await limitDurable(c, 'portfolio-fresh', 10)
+    if (blocked) return blocked
+  }
   try {
-    const result = await getPortfolio(c.env, wallet)
+    const result = await getPortfolio(c.env, wallet, { fresh })
     c.header('Cache-Control', 'private, no-store')
     c.header('X-HeyStockers-Cache', result.cache)
     return c.json(result.payload)
@@ -174,7 +217,7 @@ app.get('/api/portfolio', async (c) => {
 })
 
 app.get('/api/trades/order', async (c) => {
-  const blocked = limit(c, 'order', 30)
+  const blocked = await limitDurable(c, 'order', 30)
   if (blocked) return blocked
   const userPublicKey = c.req.query('userPublicKey') ?? ''
   if (userPublicKey && !WALLET_PATTERN.test(userPublicKey)) return c.json({ error: 'Wallet address is not valid.' }, 400)
@@ -186,8 +229,13 @@ app.get('/api/trades/order', async (c) => {
       userPublicKey,
     })
     const headers = new Headers(c.res.headers)
-    headers.set('Content-Type', upstream.headers.get('Content-Type') ?? 'application/json')
     headers.set('Cache-Control', 'no-store')
+    if (!upstream.ok) {
+      // Surface only a short vetted message instead of the raw upstream body.
+      headers.set('Content-Type', 'application/json')
+      return new Response(JSON.stringify({ error: await upstreamOrderError(upstream) }), { status: upstream.status, headers })
+    }
+    headers.set('Content-Type', upstream.headers.get('Content-Type') ?? 'application/json')
     return new Response(upstream.body, {
       status: upstream.status,
       headers,
@@ -200,9 +248,61 @@ app.get('/api/trades/order', async (c) => {
   }
 })
 
+app.post('/api/trades/record', async (c) => {
+  const blocked = await limitDurable(c, 'trade-record', 12)
+  if (blocked) return blocked
+  const body = await jsonBody<{ signature?: string; wallet?: string }>(c)
+  const signature = body.signature?.trim() ?? ''
+  const wallet = body.wallet?.trim() ?? ''
+  if (!WALLET_PATTERN.test(wallet) || !SIGNATURE_PATTERN.test(signature)) {
+    return c.json({ error: 'A wallet and confirmed trade signature are required.' }, 400)
+  }
+  const existing = await c.env.DB.prepare('SELECT signature FROM trades WHERE signature = ?').bind(signature).first()
+  if (existing) return c.json({ recorded: true, duplicate: true })
+  try {
+    const transaction = await getParsedTransaction(c.env, signature)
+    if (!transaction || !transactionSignedBy(transaction, wallet)) {
+      return c.json({ error: 'This trade is not confirmed for that wallet yet.' }, 409)
+    }
+    const trade = parseSupportedTrade(transaction, wallet)
+    if (!trade) return c.json({ error: 'Only supported stock and USDC swaps are recorded.' }, 422)
+    const blockTime = transaction.blockTime ? new Date(transaction.blockTime * 1000).toISOString() : null
+    if (!blockTime || Date.parse(blockTime) < Date.now() - 24 * 60 * 60_000) {
+      return c.json({ error: 'Only recent trades can be recorded.' }, 422)
+    }
+    await c.env.DB.prepare(
+      `INSERT INTO trades (signature, wallet, symbol, side, asset_atomic, usdc_atomic, price_usd, block_time, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(signature) DO NOTHING`,
+    ).bind(signature, wallet, trade.symbol, trade.side, trade.assetAtomic, trade.usdcAtomic, trade.priceUsd, blockTime, new Date().toISOString()).run()
+    return c.json({ recorded: true, trade: { ...trade, signature, blockTime } }, 201)
+  } catch (error) {
+    console.error(JSON.stringify({ requestId: c.get('requestId'), operation: 'trade-record', message: error instanceof Error ? error.message : 'unknown' }))
+    return c.json({ error: 'The trade could not be verified right now.' }, 502)
+  }
+})
+
+app.get('/api/trades/history', async (c) => {
+  const blocked = limit(c, 'trade-history', 60)
+  if (blocked) return blocked
+  const wallet = c.req.query('wallet') ?? ''
+  if (!WALLET_PATTERN.test(wallet)) return c.json({ error: 'Wallet address is not valid.' }, 400)
+  const result = await c.env.DB.prepare(
+    `SELECT signature, symbol, side, asset_atomic AS assetAtomic, usdc_atomic AS usdcAtomic,
+       price_usd AS priceUsd, block_time AS blockTime
+     FROM trades WHERE wallet = ? ORDER BY block_time DESC LIMIT 50`,
+  ).bind(wallet).all()
+  c.header('Cache-Control', 'no-store')
+  return c.json({ trades: result.results })
+})
+
 app.get('/api/social/feed', async (c) => {
+  const blocked = limit(c, 'feed', 60)
+  if (blocked) return blocked
   const candidate = c.req.query('viewer') ?? ''
   const viewer = WALLET_PATTERN.test(candidate) ? candidate : ''
+  const beforeCandidate = c.req.query('before') ?? ''
+  const before = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(beforeCandidate) ? beforeCandidate : ''
+  const pageSize = Math.min(50, Math.max(1, Number(c.req.query('limit')) || 30))
   const [callResult, prices] = await Promise.all([
     c.env.DB.prepare(
       `SELECT c.id, c.wallet, p.username, c.symbol, c.side, c.thesis,
@@ -212,38 +312,45 @@ app.get('/api/social/feed', async (c) => {
         c.resolved_at AS resolvedAt, c.resolved_price AS resolvedPrice,
         c.created_at AS createdAt,
         (SELECT COUNT(*) FROM call_signals s WHERE s.call_id = c.id) AS signalCount,
-        EXISTS(SELECT 1 FROM call_signals vs WHERE vs.call_id = c.id AND vs.wallet = ?) AS signaled,
-        EXISTS(SELECT 1 FROM follows f WHERE f.follower_wallet = ? AND f.following_wallet = c.wallet) AS following
+        EXISTS(SELECT 1 FROM call_signals vs WHERE vs.call_id = c.id AND vs.wallet = ?1) AS signaled,
+        EXISTS(SELECT 1 FROM follows f WHERE f.follower_wallet = ?2 AND f.following_wallet = c.wallet) AS following
       FROM position_calls c
       LEFT JOIN profiles p ON p.wallet = c.wallet
-      ORDER BY c.created_at DESC LIMIT 100`,
-    ).bind(viewer, viewer).all<CallRow>(),
+      WHERE (?3 = '' OR c.created_at < ?3)
+      ORDER BY c.created_at DESC LIMIT ?4`,
+    ).bind(viewer, viewer, before, pageSize).all<CallRow>(),
     getStockPrices(c.env),
   ])
-  const now = new Date()
-  const calls = callResult.results.map((call) => {
-    const currentPrice = prices[call.symbol] ?? null
-    const outcome = call.outcome === 'OPEN' ? settlePositionCall(call.side, call.targetPrice, call.deadline, currentPrice, now.getTime()) : call.outcome
-    return { ...call, currentPrice, outcome, progress: positionProgress(call.side, call.entryPrice, call.targetPrice, currentPrice), signaled: Boolean(call.signaled), following: Boolean(call.following) }
-  })
-  const settled = calls.filter((call, index) => callResult.results[index]?.outcome === 'OPEN' && call.outcome !== 'OPEN' && call.currentPrice !== null)
-  if (settled.length) {
-    await c.env.DB.batch(settled.map((call) => c.env.DB.prepare(
-      "UPDATE position_calls SET outcome = ?, resolved_at = ?, resolved_price = ? WHERE id = ? AND outcome = 'OPEN'",
-    ).bind(call.outcome, now.toISOString(), call.currentPrice, call.id)))
+  // Read-only: the cron in settlement.ts is the settlement authority, so the
+  // feed reports stored outcomes plus live progress toward the target.
+  const calls = callResult.results.map((call) => ({
+    ...call,
+    currentPrice: prices[call.symbol] ?? null,
+    progress: positionProgress(call.side, call.entryPrice, call.targetPrice, prices[call.symbol] ?? null),
+    signaled: Boolean(call.signaled),
+    following: Boolean(call.following),
+  }))
+  const wallets = [...new Set(calls.map((call) => call.wallet))]
+  const byWallet: Record<string, { wins: number; losses: number }> = {}
+  if (wallets.length) {
+    const records = await c.env.DB.prepare(
+      `SELECT wallet,
+        SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN outcome = 'LOST' THEN 1 ELSE 0 END) AS losses
+      FROM position_calls WHERE wallet IN (${wallets.map(() => '?').join(',')}) GROUP BY wallet`,
+    ).bind(...wallets).all<{ wallet: string; wins: number; losses: number }>()
+    for (const record of records.results) byWallet[record.wallet] = { wins: record.wins, losses: record.losses }
   }
-  const records = await c.env.DB.prepare(
-    `SELECT wallet,
-      SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) AS wins,
-      SUM(CASE WHEN outcome = 'LOST' THEN 1 ELSE 0 END) AS losses
-    FROM position_calls GROUP BY wallet`,
-  ).all<{ wallet: string; wins: number; losses: number }>()
-  const byWallet = Object.fromEntries(records.results.map((record) => [record.wallet, { wins: record.wins, losses: record.losses }]))
   c.header('Cache-Control', 'no-store')
-  return c.json({ calls: calls.map((call) => ({ ...call, record: byWallet[call.wallet] ?? { wins: 0, losses: 0 } })) })
+  return c.json({
+    calls: calls.map((call) => ({ ...call, record: byWallet[call.wallet] ?? { wins: 0, losses: 0 } })),
+    nextBefore: callResult.results.length === pageSize ? callResult.results[callResult.results.length - 1]?.createdAt ?? null : null,
+  })
 })
 
 app.post('/api/social/posts', async (c) => {
+  const blocked = await limitDurable(c, 'posts', 10)
+  if (blocked) return blocked
   const wallet = await authenticatedWallet(c.env.DB, c.req.header('Authorization'))
   if (!wallet) return c.json({ error: 'Verify your wallet before publishing a call.' }, 401)
   if (!(await profileExists(c.env.DB, wallet))) return c.json({ error: 'Create your username before publishing a call.' }, 409)
@@ -329,4 +436,21 @@ app.onError((error, c) => {
   return c.json({ error: 'The service could not complete this request.', requestId: c.get('requestId') }, 500)
 })
 
-export default app
+async function runScheduledMaintenance(env: Bindings) {
+  try {
+    const settled = await settleOpenCalls(env.DB)
+    await purgeExpiredRows(env.DB)
+    if (settled) console.log(JSON.stringify({ operation: 'settlement', settled }))
+  } catch (error) {
+    console.error(JSON.stringify({ operation: 'settlement', message: error instanceof Error ? error.message : 'unknown' }))
+  }
+}
+
+export { app }
+
+export default {
+  fetch: app.fetch,
+  scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
+    ctx.waitUntil(runScheduledMaintenance(env))
+  },
+}

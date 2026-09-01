@@ -58,7 +58,32 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
   50% { opacity: 1; transform: scale(1); }
 }
 
-.simple-shell { width: min(900px, calc(100% - 48px)); margin: 0 auto; padding: 52px 0 100px; }
+.tab-nav { display: flex; justify-content: center; gap: 6px; padding: 16px 16px 0; }
+.tab-nav button { min-height: 42px; padding: 0 22px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .02em; }
+.tab-nav button.active { color: var(--white); border-bottom-color: var(--accent); }
+.tab-nav button:hover { color: var(--white); }
+
+.sub-switch { display: inline-flex; margin-bottom: 26px; border: 1px solid var(--line); }
+.sub-switch button { min-height: 34px; padding: 0 18px; border: 0; background: transparent; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .03em; }
+.sub-switch button.active { background: var(--white); color: var(--soft-black); }
+
+.track-record { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 8px; padding: 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.track-record span { color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.track-record strong { font: 650 13px "SFMono-Regular", Consolas, monospace; }
+
+.history-row { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
+.history-row:last-child { border-bottom: 1px solid var(--line); }
+.history-right { display: flex; align-items: center; gap: 10px; }
+.history-right strong { font: 650 11px "SFMono-Regular", Consolas, monospace; }
+.history-lead { display: flex; flex-direction: column; gap: 4px; }
+.history-lead b { font-size: 12px; }
+.history-lead small { color: var(--muted); font-size: 9px; }
+.history-row em { padding: 4px 8px; background: var(--soft-black); color: var(--muted); font-size: 8px; font-style: normal; font-weight: 850; letter-spacing: .05em; }
+.history-row em.outcome.open { background: var(--accent-soft); color: var(--accent-strong); }
+.history-row em.outcome.won { background: var(--buy); color: var(--buy-ink); }
+.history-row em.outcome.lost { background: var(--sell); color: #fff; }
+
+.simple-shell { width: min(900px, calc(100% - 48px)); margin: 0 auto; padding: 40px 0 100px; }
 .product-section { scroll-margin-top: 80px; padding: 0 0 72px; }
 .product-section + .product-section { padding-top: 8px; }
 .section-heading { margin-bottom: 28px; display: flex; align-items: end; justify-content: space-between; gap: 24px; }
@@ -94,6 +119,15 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .sell-stock { padding: 0; background: transparent; color: var(--sell); }
 .sell-stock:hover, .text-button:hover, .topbar-actions button:hover { opacity: .68; }
 .market-toggle { margin-top: 18px; padding: 0; border: 0; background: transparent; color: var(--white); font-size: 10px; font-weight: 800; }
+.market-label .live-dot { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--buy); vertical-align: middle; animation: fee-pulse 1.6s ease-in-out infinite; }
+.asset-quote strong.quote-price { color: var(--white); }
+@keyframes price-flash-up { 0% { color: var(--buy); } 100% { color: var(--white); } }
+@keyframes price-flash-down { 0% { color: var(--sell); } 100% { color: var(--white); } }
+.asset-quote strong.quote-price.flash-up { animation: price-flash-up 0.9s ease-out; }
+.asset-quote strong.quote-price.flash-down { animation: price-flash-down 0.9s ease-out; }
+.chg-24h { font-weight: 800; }
+.chg-24h.up { color: var(--buy); }
+.chg-24h.down { color: var(--sell); }
 
 .empty-line { margin: 0; padding: 18px 0; color: var(--muted); font-size: 12px; }
 .holding-row { width: 100%; min-height: 62px; padding: 0; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--white); display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 12px; text-align: left; }
@@ -150,7 +184,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .call-actions { justify-content: flex-end; gap: 18px; }
 .call-actions button:hover, .call-actions button.reacted, .call-meta button:hover { color: var(--white); }
 
-.toast { position: fixed; right: 20px; bottom: 20px; z-index: 60; max-width: 360px; padding: 13px 40px 13px 15px; border: 1px solid var(--accent); background: var(--raised); color: var(--white); text-align: left; font-size: 11px; }
+.toast { position: fixed; right: 20px; bottom: 20px; z-index: 200; max-width: 360px; padding: 13px 40px 13px 15px; border: 1px solid var(--accent); background: var(--raised); color: var(--white); text-align: left; font-size: 11px; }
 .toast span { position: absolute; right: 14px; }
 
 .guide-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.82); backdrop-filter: blur(6px); }
@@ -175,6 +209,9 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .eyebrow, .field-label { display: block; margin: 0; color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: .08em; }
 .trade-title-row h2 { margin: 5px 0 0; font: 400 34px Georgia, "Times New Roman", serif; letter-spacing: -.04em; }
 .connection-pill { color: var(--muted); font: 700 9px "SFMono-Regular", Consolas, monospace; }
+.trade-price { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 18px; padding: 13px 0; border-block: 1px solid var(--line); }
+.trade-price span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.trade-price strong { font: 650 17px "SFMono-Regular", Consolas, monospace; }
 .side-switch { display: flex; margin-bottom: 18px; }
 .side-switch button { min-height: 36px; flex: 1; border: 0; background: var(--soft-black); color: var(--muted); font-size: 10px; font-weight: 800; }
 .side-switch button:first-child.selected { background: var(--buy); color: var(--buy-ink); }
@@ -185,6 +222,10 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .amount-field input { min-width: 0; width: 100%; border: 0; background: transparent; color: var(--white); font: 500 24px "SFMono-Regular", Consolas, monospace; }
 .amount-field input:focus { outline: 0; }
 .amount-field small { color: var(--muted); }
+.amount-presets { display: flex; gap: 6px; margin-top: 10px; }
+.amount-presets button { flex: 1; min-height: 34px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .04em; }
+.amount-presets button:hover { color: var(--white); border-color: var(--muted); }
+.amount-presets button.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .route-preview { margin-top: 18px; padding: 16px 0; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; border-block: 1px solid var(--line); }
 .route-preview div { display: flex; flex-direction: column; gap: 5px; }
 .route-preview div:last-child { text-align: right; }
@@ -229,7 +270,9 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 @media (max-width: 680px) {
   .social-topbar { height: auto; min-height: 58px; padding: 9px 16px 11px; grid-template-columns: 1fr auto; gap: 8px 12px; }
   .header-people-search { grid-column: 1 / -1; grid-row: 2; width: 100%; }
-  .simple-shell { width: calc(100% - 28px); padding-top: 34px; }
+  .tab-nav { gap: 2px; padding-top: 12px; }
+  .tab-nav button { padding: 0 14px; }
+  .simple-shell { width: calc(100% - 28px); padding-top: 28px; }
   .product-section { padding-bottom: 58px; }
   .section-heading { align-items: flex-start; }
   .section-heading > div:first-child { align-items: flex-start; flex-direction: column; gap: 8px; }
@@ -254,7 +297,8 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .zero-fee-banner i { animation: none; opacity: 1; transform: none; }
+  .zero-fee-banner i, .market-label .live-dot { animation: none; opacity: 1; transform: none; }
+  .asset-quote strong.quote-price.flash-up, .asset-quote strong.quote-price.flash-down { animation: none; }
 }
 
 .legal-page { width: min(760px, calc(100% - 40px)); margin: 0 auto; padding: 48px 0 80px; color: var(--white); }
