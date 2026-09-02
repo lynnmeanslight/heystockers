@@ -89,6 +89,13 @@ export async function getProfileByWallet(db: D1Database, wallet: string, viewer 
   return publicProfile(row)
 }
 
+export async function getProfileByUsername(db: D1Database, rawUsername: string, viewer = '') {
+  const username = normalizeUsername(rawUsername)
+  if (!USERNAME_PATTERN.test(username)) return null
+  const row = await db.prepare(`${PROFILE_SELECT} WHERE p.username = ? COLLATE NOCASE`).bind(viewer, username).first<ProfileRow>()
+  return publicProfile(row)
+}
+
 export async function searchProfiles(db: D1Database, rawQuery: string, viewer = '') {
   const query = normalizeSearchQuery(rawQuery)
   if (!query) return []

@@ -1,9 +1,10 @@
 import { Hono, type Context } from 'hono'
+import { capturePriceSnapshots, getLeaderboard, getPriceHistory } from './analytics'
 import { authenticatedWallet, challengeDomain, createChallenge, revokeSession, verifyChallenge } from './auth'
 import { SIGNATURE_PATTERN, TRADE_ASSETS, WALLET_PATTERN } from './assets'
 import { buildOrder, getStockMarket, getStockPrices } from './market'
 import { positionProgress, targetMatchesSide, type PositionOutcome, type PositionSide } from './position-calls'
-import { deleteAccountData, getProfileByWallet, listConnections, profileExists, ProfileError, saveProfile, searchProfiles } from './profiles'
+import { deleteAccountData, getProfileByUsername, getProfileByWallet, listConnections, profileExists, ProfileError, saveProfile, searchProfiles } from './profiles'
 import { takeDurableRateLimit, takeRateLimit } from './rate-limit'
 import { allowedOrigin } from './security'
 import { purgeExpiredRows, settleOpenCalls } from './settlement'
@@ -147,6 +148,17 @@ app.get('/api/profiles/by-wallet', async (c) => {
   return c.json({ profile })
 })
 
+app.get('/api/profiles/by-username', async (c) => {
+  const blocked = limit(c, 'profile-by-username', 60)
+  if (blocked) return blocked
+  const viewerCandidate = c.req.query('viewer') ?? ''
+  const viewer = WALLET_PATTERN.test(viewerCandidate) ? viewerCandidate : ''
+  const profile = await getProfileByUsername(c.env.DB, c.req.query('username') ?? '', viewer)
+  if (!profile) return c.json({ error: 'No stocker goes by that username.' }, 404)
+  c.header('Cache-Control', 'no-store')
+  return c.json({ profile })
+})
+
 app.get('/api/profiles/search', async (c) => {
   const blocked = limit(c, 'profile-search', 40)
   if (blocked) return blocked
@@ -195,6 +207,22 @@ app.get('/api/stocks/quotes', async (c) => {
   const { prices, changes, volumes } = await getStockMarket()
   c.header('Cache-Control', 'public, max-age=10, s-maxage=15, stale-while-revalidate=30')
   return c.json({ prices, changes, volumes, updatedAt: new Date().toISOString(), source: 'Solana market activity' })
+})
+
+app.get('/api/stocks/history', async (c) => {
+  const blocked = limit(c, 'stock-history', 30)
+  if (blocked) return blocked
+  const series = await getPriceHistory(c.env.DB)
+  c.header('Cache-Control', 'public, max-age=300, stale-while-revalidate=600')
+  return c.json({ series, windowHours: 24 })
+})
+
+app.get('/api/social/leaderboard', async (c) => {
+  const blocked = limit(c, 'leaderboard', 30)
+  if (blocked) return blocked
+  const leaders = await getLeaderboard(c.env.DB, 25)
+  c.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=120')
+  return c.json({ leaders })
 })
 
 app.get('/api/portfolio', async (c) => {
@@ -300,6 +328,8 @@ app.get('/api/social/feed', async (c) => {
   if (blocked) return blocked
   const candidate = c.req.query('viewer') ?? ''
   const viewer = WALLET_PATTERN.test(candidate) ? candidate : ''
+  const authorCandidate = c.req.query('author') ?? ''
+  const author = WALLET_PATTERN.test(authorCandidate) ? authorCandidate : ''
   const beforeCandidate = c.req.query('before') ?? ''
   const before = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(beforeCandidate) ? beforeCandidate : ''
   const pageSize = Math.min(50, Math.max(1, Number(c.req.query('limit')) || 30))
@@ -316,9 +346,9 @@ app.get('/api/social/feed', async (c) => {
         EXISTS(SELECT 1 FROM follows f WHERE f.follower_wallet = ?2 AND f.following_wallet = c.wallet) AS following
       FROM position_calls c
       LEFT JOIN profiles p ON p.wallet = c.wallet
-      WHERE (?3 = '' OR c.created_at < ?3)
-      ORDER BY c.created_at DESC LIMIT ?4`,
-    ).bind(viewer, viewer, before, pageSize).all<CallRow>(),
+      WHERE (?3 = '' OR c.created_at < ?3) AND (?4 = '' OR c.wallet = ?4)
+      ORDER BY c.created_at DESC LIMIT ?5`,
+    ).bind(viewer, viewer, before, author, pageSize).all<CallRow>(),
     getStockPrices(c.env),
   ])
   // Read-only: the cron in settlement.ts is the settlement authority, so the
@@ -439,6 +469,7 @@ app.onError((error, c) => {
 async function runScheduledMaintenance(env: Bindings) {
   try {
     const settled = await settleOpenCalls(env.DB)
+    await capturePriceSnapshots(env.DB)
     await purgeExpiredRows(env.DB)
     if (settled) console.log(JSON.stringify({ operation: 'settlement', settled }))
   } catch (error) {

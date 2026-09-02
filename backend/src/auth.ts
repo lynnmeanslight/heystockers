@@ -48,7 +48,7 @@ export async function createChallenge(db: D1Database, wallet: string, domain = '
   return { challengeId, message, expiresAt: expiresAt.toISOString() }
 }
 
-export async function verifyChallenge(db: D1Database, body: { wallet?: string; challengeId?: string; signature?: string }) {
+export async function verifyChallenge(db: D1Database, body: { wallet?: string; challengeId?: string; signature?: string; signedMessage?: string }) {
   const wallet = body.wallet?.trim() ?? ''
   const challengeId = body.challengeId?.trim() ?? ''
   const signatureBase64 = body.signature?.trim() ?? ''
@@ -64,7 +64,19 @@ export async function verifyChallenge(db: D1Database, body: { wallet?: string; c
   }
   try {
     const signature = Uint8Array.from(atob(signatureBase64), (character) => character.charCodeAt(0))
-    const valid = nacl.sign.detached.verify(new TextEncoder().encode(challenge.message), signature, new PublicKey(wallet).toBytes())
+    // SIWS wallets compose and sign their own standard message, so verify the
+    // signature over those exact bytes and require our domain, wallet, and
+    // nonce inside the text. Legacy wallets sign the stored challenge message.
+    const signedBytes = body.signedMessage
+      ? Uint8Array.from(atob(body.signedMessage), (character) => character.charCodeAt(0))
+      : new TextEncoder().encode(challenge.message)
+    if (body.signedMessage) {
+      const domain = challenge.message.split('\n').find((line) => line.startsWith('Domain: '))?.slice('Domain: '.length) ?? 'heystockers.trade'
+      const text = new TextDecoder().decode(signedBytes)
+      const intro = `${domain} wants you to sign in with your Solana account:\n${wallet}`
+      if (!text.startsWith(intro) || !text.includes(`Nonce: ${challengeId}`)) throw new Error('siws mismatch')
+    }
+    const valid = nacl.sign.detached.verify(signedBytes, signature, new PublicKey(wallet).toBytes())
     if (!valid) throw new Error('invalid')
   } catch {
     throw new Response(JSON.stringify({ error: 'The wallet signature is not valid.' }), { status: 401 })
