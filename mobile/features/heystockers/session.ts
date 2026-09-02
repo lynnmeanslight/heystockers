@@ -14,7 +14,12 @@ export async function getSession(wallet: string, signMessages: SignMessages) {
 
   const challenge = await createChallenge(wallet)
   const signed = await signMessages(new TextEncoder().encode(challenge.message))
-  const verified = await verifyChallenge(wallet, challenge.challengeId, fromUint8Array(signed))
+  // Mobile Wallet Adapter returns the signed message as the original bytes with the
+  // 64-byte signature appended. The backend verifies a detached signature, so send
+  // only the trailing 64 bytes. (slice(-64) is a no-op for a wallet that already
+  // returns a bare signature.)
+  const signature = signed.slice(-64)
+  const verified = await verifyChallenge(wallet, challenge.challengeId, fromUint8Array(signature))
   await AsyncStorage.setItem(key(wallet), verified.token)
   return verified.token
 }
