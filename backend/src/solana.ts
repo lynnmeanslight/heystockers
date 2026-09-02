@@ -152,7 +152,10 @@ export function transactionSignedBy(transaction: ParsedTransaction, wallet: stri
 
 export async function getParsedTransaction(env: Bindings, signature: string) {
   if (!env.SOLANA_PROOF_RPC_URL) throw new Error('Proof RPC is not configured')
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  // A freshly submitted swap can take several seconds to reach 'confirmed' and be
+  // indexed by the RPC. Poll for ~10s so the matching trade lands before we reject
+  // the Position Call as unverified (the post fires right after the wallet signs).
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     const response = await fetch(env.SOLANA_PROOF_RPC_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -162,7 +165,7 @@ export async function getParsedTransaction(env: Bindings, signature: string) {
     if (!response.ok) throw new Error('Proof RPC failed')
     const body = await response.json<{ result?: ParsedTransaction | null }>()
     if (body.result) return body.result
-    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 600))
+    if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 2000))
   }
   return null
 }
