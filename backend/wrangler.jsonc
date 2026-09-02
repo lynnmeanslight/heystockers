@@ -34,10 +34,9 @@
       "vars": {
         "ENVIRONMENT": "production",
         "ALLOWED_ORIGINS": "https://heystockers.trade,https://www.heystockers.trade",
-        // Keyless dev endpoint works but is rate-limited. Before real-user
-        // volume, point this at DFlow's production quote endpoint and add the
-        // DFLOW_API_KEY secret (see README). Kept functional so a first deploy works.
-        "DFLOW_TRADE_API_URL": "https://dev-quote-api.dflow.net"
+        // Production quote/order endpoint (higher rate limits). Requires the
+        // DFLOW_API_KEY secret, which the Worker sends as the x-api-key header.
+        "DFLOW_TRADE_API_URL": "https://quote-api.dflow.net"
       },
       // Cloudflare auto-creates the DNS record for this custom domain.
       // Ensure no conflicting CNAME for api.heystockers.trade exists first.
