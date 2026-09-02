@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; padding: 0; }
+  .tile {
+    width: 1200px; height: 1200px; position: relative; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 40%, #1c1c1c 0%, #0a0a0a 64%, #000 100%);
+    font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .mark { margin-bottom: 70px; }
+  .overline { color: #7c8899; font-size: 26px; font-weight: 700; letter-spacing: 9px; text-transform: uppercase; margin-bottom: 22px; }
+  .wordmark { color: #ffffff; font-size: 92px; font-weight: 800; letter-spacing: 2px; line-height: 1; }
+  .rule { width: 64px; height: 3px; background: #ffffff; opacity: 0.28; margin: 34px 0; }
+  .tagline { color: #aeb6c2; font-size: 30px; font-weight: 500; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+  <div class="tile">
+    <svg class="mark" width="300" height="300" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1024" height="1024" rx="224" fill="#ffffff"/>
+      <rect x="232" y="184" width="152" height="656" rx="44" fill="#000000"/>
+      <rect x="640" y="184" width="152" height="656" rx="44" fill="#000000"/>
+      <path d="M352 604V448L672 284V440L352 604Z" fill="#000000"/>
+    </svg>
+    <div class="overline">Tokenized stocks on Solana</div>
+    <div class="wordmark">HEYSTOCKERS</div>
+    <div class="rule"></div>
+    <div class="tagline">Buy, sell, and prove your calls onchain.</div>
+  </div>
+</body>
+</html>
