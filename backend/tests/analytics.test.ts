@@ -59,14 +59,18 @@ describe('leaderboard', () => {
 describe('price history', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('captures snapshots only on five-minute boundaries and averages them per hour', async () => {
+  it('floors runs into five-minute buckets, deduping repeats, and averages per hour', async () => {
     const { db, database } = migratedD1()
     const asset = TRADE_ASSETS[0]
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify([
       { pairAddress: 'pool', baseToken: { address: asset.mint }, priceUsd: '120', volume: { h24: 10 }, liquidity: { usd: 100 } },
     ]), { headers: { 'Content-Type': 'application/json' } }))
 
-    expect(await capturePriceSnapshots(db, Date.parse('2026-09-03T10:01:00.000Z'))).toBe(0)
+    // Cron lag lands runs mid-minute; both calls floor into the 10:00 bucket.
+    expect(await capturePriceSnapshots(db, Date.parse('2026-09-03T10:01:00.000Z'))).toBeGreaterThan(0)
+    expect(await capturePriceSnapshots(db, Date.parse('2026-09-03T10:03:30.000Z'))).toBeGreaterThan(0)
+    const bucketRows = database.prepare('SELECT captured_at FROM price_snapshots WHERE symbol = ?').all(asset.symbol) as Array<{ captured_at: string }>
+    expect(bucketRows).toEqual([{ captured_at: '2026-09-03T10:00:00.000Z' }])
     expect(await capturePriceSnapshots(db, Date.parse('2026-09-03T10:05:02.000Z'))).toBeGreaterThan(0)
 
     database.prepare('INSERT INTO price_snapshots (symbol, price, captured_at) VALUES (?, ?, ?)').run(asset.symbol, 100, '2026-09-03T09:10:00.000Z')

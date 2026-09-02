@@ -40,13 +40,13 @@ export async function getLeaderboard(db: D1Database, limit = 25) {
   return result.results
 }
 
-// The cron fires every minute; persist one sample per 5-minute bucket and
-// keep a rolling 24h window for sparklines.
+// The cron fires every minute; floor each run into a 5-minute bucket so the
+// first run per bucket inserts and the rest no-op via INSERT OR IGNORE. Never
+// gate on the wall-clock minute: Cloudflare can start the run seconds after
+// scheduledTime, rolling Date.now() past the mark.
 export async function capturePriceSnapshots(db: D1Database, now = Date.now()) {
-  const stamp = new Date(now)
-  if (stamp.getUTCMinutes() % SNAPSHOT_EVERY_MINUTES !== 0) return 0
-  stamp.setUTCSeconds(0, 0)
-  const capturedAt = stamp.toISOString()
+  const bucketMs = SNAPSHOT_EVERY_MINUTES * 60_000
+  const capturedAt = new Date(Math.floor(now / bucketMs) * bucketMs).toISOString()
   const prices = (await getStockMarket()).prices
   const entries = Object.entries(prices).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && entry[1] > 0)
   if (!entries.length) return 0
