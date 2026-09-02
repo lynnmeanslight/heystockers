@@ -8,7 +8,8 @@ import { PeopleSearch } from '../components/PeopleSearch';
 import { TradeModal } from '../components/TradeModal';
 import { apiUrl } from '../lib/api';
 import { TRADE_ASSETS } from '../lib/assets';
-import { connectWalletProvider, getWalletProvider, isMobileUserAgent, phantomBrowseUrl } from '../lib/wallet';
+import { sparklinePoints } from '../lib/sparkline';
+import { connectWalletProvider, getWalletProvider, isMobileUserAgent, phantomBrowseUrl, signInWithProvider } from '../lib/wallet';
 
 type Holding = { symbol: string; name: string; amount: number; priceUsd: number | null; valueUsd: number | null };
 type PortfolioResponse = { wallet: string; stockValueUsd: number; usdcValueUsd: number; holdings: Holding[]; prices: Record<string, number | null>; updatedAt: string; source: string; error?: string };
@@ -17,10 +18,11 @@ type CallDraft = { symbol: string; side: 'BUY' | 'SELL'; targetPrice: number; de
 type PendingTradeProof = { call: CallDraft; signature: string };
 type StoredSession = { token: string; wallet: string; expiresAt: string };
 type TradeRecord = { signature: string; symbol: string; side: 'BUY' | 'SELL'; assetAtomic: string; usdcAtomic: string; priceUsd: number | null; blockTime: string | null };
+type Leader = { wallet: string; username: string | null; wins: number; losses: number; openCalls: number; winRate: number; stakedPnlUsdc: number; lastCallAt: string };
 
 const SESSION_KEY = 'heystockers:session';
 const TAB_KEY = 'heystockers:tab';
-const MAIN_TABS = ['feed', 'market', 'portfolio'] as const;
+const MAIN_TABS = ['feed', 'market', 'portfolio', 'leaders'] as const;
 type MainTab = (typeof MAIN_TABS)[number];
 
 function readStoredSession(wallet: string): StoredSession | null {
@@ -74,6 +76,18 @@ function timeAgo(value: string) {
 }
 function shortDate(value: string) { return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(value)); }
 
+// Settled-call accuracy, or null before the market has graded anything.
+function accuracyPct(record: { wins: number; losses: number }) {
+  const settled = record.wins + record.losses;
+  return settled > 0 ? Math.round((record.wins / settled) * 100) : null;
+}
+
+function Sparkline({ values }: { values: number[] }) {
+  const points = sparklinePoints(values);
+  const up = values.length > 1 && values[values.length - 1] >= values[0];
+  return <span className="spark-slot" aria-hidden="true">{points && <svg viewBox="0 0 72 22" width="72" height="22"><polyline points={points} fill="none" stroke={up ? 'var(--buy)' : 'var(--sell)'} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" /></svg>}</span>;
+}
+
 export default function Home() {
   const [walletAddress, setWalletAddress] = useState('');
   const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null);
@@ -107,8 +121,11 @@ export default function Home() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [communityOpen, setCommunityOpen] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [activeTab, setActiveTab] = useState<'market' | 'portfolio' | 'feed'>('market');
+  const [activeTab, setActiveTab] = useState<MainTab>('market');
   const [portfolioView, setPortfolioView] = useState<'holdings' | 'history'>('holdings');
+  const [history, setHistory] = useState<Record<string, number[]>>({});
+  const [leaders, setLeaders] = useState<Leader[]>([]);
+  const [leadersStatus, setLeadersStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [referralCode] = useState(() => typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get('ref')?.trim() ?? '');
 
   const loadFeed = useCallback(async (viewer = '', options: { before?: string; append?: boolean } = {}) => {
@@ -178,8 +195,7 @@ export default function Home() {
   const loadQuotes = useCallback(async () => {
     try {
       const response = await fetch(apiUrl('/api/stocks/quotes'), { cache: 'no-store' });
-      if (!response.ok) return;
-      const payload = await response.json() as { prices?: Record<string, number | null>; changes?: Record<string, number | null>; volumes?: Record<string, number> };
+      if (!response.ok) return;      const payload = await response.json() as { prices?: Record<string, number | null>; changes?: Record<string, number | null>; volumes?: Record<string, number> };
       const prices = payload.prices ?? {};
       // Flash each price green/red for one tick when it moves vs. the previous poll.
       const previous = lastPricesRef.current;
@@ -199,6 +215,27 @@ export default function Home() {
       if (initialPrice !== null) setTargetPrice((current) => current || (initialPrice * 1.05).toFixed(2));
     } catch {
       // Keep the last good quotes if a refresh fails.
+    }
+  }, []);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const response = await fetch(apiUrl('/api/stocks/history'), { cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json() as { series?: Record<string, number[]> };
+      setHistory(payload.series ?? {});
+    } catch { /* sparklines are progressive enhancement */ }
+  }, []);
+
+  const loadLeaders = useCallback(async () => {
+    try {
+      const response = await fetch(apiUrl('/api/social/leaderboard'), { cache: 'no-store' });
+      const payload = await response.json() as { leaders?: Leader[] };
+      if (!response.ok) throw new Error('Leaderboard unavailable');
+      setLeaders(payload.leaders ?? []);
+      setLeadersStatus('ready');
+    } catch {
+      setLeadersStatus('error');
     }
   }, []);
 
@@ -247,8 +284,15 @@ export default function Home() {
     const feedTimer = window.setTimeout(() => void loadFeed(''), 0);
     const quotesInit = window.setTimeout(() => void loadQuotes(), 0);
     const quotesTimer = window.setInterval(() => { if (!document.hidden) void loadQuotes(); }, 10_000);
-    return () => { window.clearTimeout(feedTimer); window.clearTimeout(quotesInit); window.clearInterval(quotesTimer); };
-  }, [loadFeed, loadQuotes]);
+    const historyInit = window.setTimeout(() => void loadHistory(), 0);
+    const historyTimer = window.setInterval(() => { if (!document.hidden) void loadHistory(); }, 300_000);
+    return () => { window.clearTimeout(feedTimer); window.clearTimeout(quotesInit); window.clearInterval(quotesTimer); window.clearTimeout(historyInit); window.clearInterval(historyTimer); };
+  }, [loadFeed, loadQuotes, loadHistory]);
+  useEffect(() => {
+    if (activeTab !== 'leaders') return;
+    const leadersTimer = window.setTimeout(() => void loadLeaders(), 0);
+    return () => window.clearTimeout(leadersTimer);
+  }, [activeTab, loadLeaders]);
   useEffect(() => {
     // Keep call prices and outcomes moving without a manual reload.
     const feedPoll = window.setInterval(() => { if (!document.hidden) void loadFeed(walletAddress); }, 45_000);
@@ -320,9 +364,24 @@ export default function Home() {
       const challengeResponse = await fetch(apiUrl('/api/auth/challenge'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: address }) });
       const challenge = await challengeResponse.json() as { message?: string; challengeId?: string; error?: string };
       if (!challengeResponse.ok || !challenge.message || !challenge.challengeId) throw new Error(challenge.error ?? 'Could not start sign-in.');
-      const signed = await provider.signMessage(new TextEncoder().encode(challenge.message), 'utf8');
-      const signature = btoa(String.fromCharCode(...signed.signature));
-      const verifyResponse = await fetch(apiUrl('/api/auth/verify'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: address, challengeId: challenge.challengeId, signature }) });
+      // Prefer Sign-In With Solana: the wallet shows its own anti-phishing
+      // prompt. A wallet without signIn falls back to plain message signing.
+      let verifyBody: Record<string, string>;
+      if (provider.signIn) {
+        const siws = await signInWithProvider(provider, {
+          address,
+          nonce: challenge.challengeId,
+          statement: 'Verify this wallet for social actions. This does not submit a transaction.',
+        });
+        if (!siws) throw new Error('Sign-in was cancelled.');
+        if (siws.address && siws.address !== address) throw new Error('Sign in with the connected wallet account.');
+        verifyBody = { wallet: address, challengeId: challenge.challengeId, signature: siws.signature, signedMessage: siws.signedMessage };
+      } else {
+        const signed = await provider.signMessage(new TextEncoder().encode(challenge.message), 'utf8');
+        const signature = btoa(String.fromCharCode(...signed.signature));
+        verifyBody = { wallet: address, challengeId: challenge.challengeId, signature };
+      }
+      const verifyResponse = await fetch(apiUrl('/api/auth/verify'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(verifyBody) });
       const verified = await verifyResponse.json() as { token?: string; expiresAt?: string; error?: string };
       if (!verifyResponse.ok || !verified.token) throw new Error(verified.error ?? 'Wallet signature was not verified.');
       setAuthToken(verified.token);
@@ -551,6 +610,7 @@ export default function Home() {
         <button type="button" role="tab" aria-selected={activeTab === 'feed'} className={activeTab === 'feed' ? 'active' : ''} onClick={() => setActiveTab('feed')}>Feed</button>
         <button type="button" role="tab" aria-selected={activeTab === 'market'} className={activeTab === 'market' ? 'active' : ''} onClick={() => setActiveTab('market')}>Market</button>
         <button type="button" role="tab" aria-selected={activeTab === 'portfolio'} className={activeTab === 'portfolio' ? 'active' : ''} onClick={() => setActiveTab('portfolio')}>Portfolio</button>
+        <button type="button" role="tab" aria-selected={activeTab === 'leaders'} className={activeTab === 'leaders' ? 'active' : ''} onClick={() => setActiveTab('leaders')}>Leaders</button>
       </nav>
 
       <div className="simple-shell">
@@ -561,9 +621,10 @@ export default function Home() {
           </div>
           <p className="market-label"><i className="live-dot" aria-hidden="true" />Live prices &amp; 24h change · all {TRADE_ASSETS.length} stocks · refreshes every 10s. Prices flash as they move.</p>
           <div className="market-list" aria-label="Stocks available to trade">
-            {TRADE_ASSETS.map((asset) => { const price = marketPrices[asset.symbol] ?? portfolio?.prices[asset.symbol] ?? null; const flash = priceFlash[asset.symbol]; const change = marketChanges[asset.symbol] ?? null; const volume = marketVolumes[asset.symbol] ?? asset.volume24h; return <article className="market-item" key={asset.symbol}>
+            {TRADE_ASSETS.map((asset) => { const price = marketPrices[asset.symbol] ?? portfolio?.prices[asset.symbol] ?? null; const flash = priceFlash[asset.symbol]; const change = marketChanges[asset.symbol] ?? null; const volume = marketVolumes[asset.symbol] ?? asset.volume24h; const trend = [...(history[asset.symbol] ?? []), ...(price === null ? [] : [price])]; return <article className="market-item" key={asset.symbol}>
               <span className={`stock-logo ${asset.symbol.toLowerCase()}`}><Image src={asset.logo} alt={`${asset.shortName} logo`} width={36} height={36} unoptimized /></span>
               <span className="asset-name"><b>{asset.symbol}</b><small>{asset.shortName}</small></span>
+              <Sparkline values={trend} />
               <span className="asset-quote"><strong key={price ?? 'na'} className={`quote-price${flash ? ` flash-${flash}` : ''}`}>{formatUsd(price)}</strong><small>{change !== null && <span className={`chg-24h ${change >= 0 ? 'up' : 'down'}`}>{change >= 0 ? '▲' : '▼'} {Math.abs(change).toFixed(2)}%</span>}{change !== null ? ' · ' : ''}{formatVolume(volume)} vol</small></span>
               <div className="trade-actions"><button type="button" className="buy-stock" onClick={() => openTrade(asset.symbol, 'buy')}>Buy</button><button type="button" className="sell-stock" onClick={() => openTrade(asset.symbol, 'sell')}>Sell</button></div>
             </article>; })}
@@ -628,15 +689,32 @@ export default function Home() {
           {walletAddress && authStatus !== 'ready' && <button type="button" className="verify-button" onClick={authenticate}>{authStatus === 'signing' ? 'Check your wallet…' : 'Verify wallet to post'}</button>}
           {feedStatus === 'error' && <p className="empty-line">The feed is unavailable right now.</p>}
           {feedStatus === 'ready' && calls.length === 0 && <p className="empty-line">No calls yet. Be the first to make one.</p>}
-          <div className="call-list">{calls.map((call) => <article className="position-call" key={call.id}>
-            <div className="call-meta"><span><b>{call.username ? `@${call.username}` : shortenAddress(call.wallet)}</b><small>{call.record.wins}W · {call.record.losses}L · {timeAgo(call.createdAt)} ago</small></span>{walletAddress && call.wallet !== walletAddress && <button type="button" onClick={() => void toggleFollow(call.wallet).catch((error) => setToast(error instanceof Error ? error.message : 'Follow could not be updated.'))}>{call.following ? 'Following' : 'Follow'}</button>}</div>
+          <div className="call-list">{calls.map((call) => { const accuracy = accuracyPct(call.record); return <article className="position-call" key={call.id}>
+            <div className="call-meta"><span>{call.username ? <a className="author-link" href={`/u/${call.username}`}><b>@{call.username}</b></a> : <b>{shortenAddress(call.wallet)}</b>}<small>{call.record.wins}W · {call.record.losses}L{accuracy !== null && <> · <span className={`chg-24h ${accuracy >= 50 ? 'up' : 'down'}`}>{accuracy}% acc</span></>} · {timeAgo(call.createdAt)} ago</small></span>{walletAddress && call.wallet !== walletAddress && <button type="button" onClick={() => void toggleFollow(call.wallet).catch((error) => setToast(error instanceof Error ? error.message : 'Follow could not be updated.'))}>{call.following ? 'Following' : 'Follow'}</button>}</div>
             <div className="call-title"><span><b>{call.side === 'BUY' ? 'UP' : 'DOWN'}</b> {call.symbol}</span><div><em className={`outcome ${call.outcome.toLowerCase()}`}>{call.outcome === 'OPEN' ? 'LIVE' : call.outcome === 'WON' ? 'HIT' : 'MISSED'}</em><em title="This trade was verified on the Solana blockchain">Verified</em></div></div>
             <div className="call-numbers"><span>Entry <b>{formatUsd(call.entryPrice)}</b></span><span>Now <b>{formatUsd(call.currentPrice)}</b></span><span>Target <b>{formatUsd(call.targetPrice)}</b></span><span>By <b>{shortDate(call.deadline)}</b></span><span>Staked <b>{formatUsd(call.commitmentUsdc)}</b></span></div>
             <div className="call-progress" aria-label={`${Math.round(call.progress * 100)} percent to target`}><i style={{ width: `${call.progress * 100}%` }} /></div>
             <p>{call.thesis}</p>
             <div className="call-actions"><button type="button" className={call.signaled ? 'reacted' : ''} onClick={() => toggleSignal(call)}>Agree {call.signalCount}</button><button type="button" onClick={() => openTrade(call.symbol, call.side === 'SELL' ? 'sell' : 'buy', call.commitmentUsdc)}>Copy trade</button></div>
-          </article>)}</div>
+          </article>; })}</div>
           {feedStatus === 'ready' && nextBefore && <button type="button" className="text-button" onClick={() => void loadFeed(walletAddress, { before: nextBefore, append: true })}>Load older calls</button>}
+        </section>}
+
+        {activeTab === 'leaders' && <section className="product-section" id="leaders">
+          <div className="section-heading compact"><h2>Leaderboard</h2><span>{leadersStatus === 'loading' ? '…' : `${leaders.length} ranked`}</span></div>
+          <p className="market-label">Settled calls only. Every win and loss is backed by a verified on-chain trade and graded by the market at settlement.</p>
+          {leadersStatus === 'error' && <p className="empty-line">The leaderboard is unavailable right now.</p>}
+          {leadersStatus === 'ready' && leaders.length === 0 && <p className="empty-line">No settled calls yet. Publish a call in the Feed tab and let the market grade it.</p>}
+          <div className="leader-list">{leaders.map((leader, index) => {
+            const rate = Math.round(leader.winRate * 100);
+            const handle = leader.username ? `@${leader.username}` : shortenAddress(leader.wallet);
+            return <article className="leader-row" key={leader.wallet}>
+              <span className="leader-rank">{index + 1}</span>
+              <span className="leader-name">{leader.username ? <a className="author-link" href={`/u/${leader.username}`}><b>{handle}</b></a> : <b>{handle}</b>}<small>{leader.wins}W · {leader.losses}L{leader.openCalls > 0 ? ` · ${leader.openCalls} live` : ''}</small></span>
+              <span className={`leader-rate chg-24h ${rate >= 50 ? 'up' : 'down'}`}>{rate}%</span>
+              <span className={`leader-pnl chg-24h ${leader.stakedPnlUsdc >= 0 ? 'up' : 'down'}`}>{formatSignedUsd(leader.stakedPnlUsdc)}</span>
+            </article>;
+          })}</div>
         </section>}
       </div>
 

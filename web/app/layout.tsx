@@ -5,6 +5,8 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
   title: 'HeyStockers · Stock SocialFi on Solana',
   description: 'Publish stock theses, build wallet reputation, and trade tokenized stocks with self-custody on Solana.',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: { capable: true, title: 'HeyStockers', statusBarStyle: 'default' },
   icons: {
     icon: [
       { url: '/favicon-mark.svg', type: 'image/svg+xml' },

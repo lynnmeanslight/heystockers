@@ -1,9 +1,17 @@
+interface SolanaSignInResult {
+  address?: { toString(): string };
+  account?: { address?: string; publicKey?: { toString(): string } | Uint8Array };
+  signedMessage: Uint8Array;
+  signature: Uint8Array;
+}
+
 interface PhantomProvider {
   isPhantom?: boolean;
   publicKey?: { toString(): string };
   connect(options?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: { toString(): string } } | boolean | void>;
   disconnect(): Promise<void>;
   signMessage(message: Uint8Array, display?: 'utf8' | 'hex'): Promise<{ signature: Uint8Array; publicKey: { toString(): string } }>;
+  signIn?(input: { domain: string; address?: string; statement?: string; nonce?: string }): Promise<SolanaSignInResult>;
   signAndSendTransaction(transaction: unknown): Promise<{ signature: string } | string>;
   on?(event: 'accountChanged', handler: (publicKey: { toString(): string } | null) => void): void;
   off?(event: 'accountChanged', handler: (publicKey: { toString(): string } | null) => void): void;
