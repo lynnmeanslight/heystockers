@@ -155,17 +155,23 @@ export async function getParsedTransaction(env: Bindings, signature: string) {
   // A freshly submitted swap can take several seconds to reach 'confirmed' and be
   // indexed by the RPC. Poll for ~10s so the matching trade lands before we reject
   // the Position Call as unverified (the post fires right after the wallet signs).
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const response = await fetch(env.SOLANA_PROOF_RPC_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 'trade-proof', method: 'getTransaction', params: [signature, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }] }),
-      signal: AbortSignal.timeout(10_000),
-    })
-    if (!response.ok) throw new Error('Proof RPC failed')
-    const body = await response.json<{ result?: ParsedTransaction | null }>()
-    if (body.result) return body.result
-    if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 2000))
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const response = await fetch(env.SOLANA_PROOF_RPC_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'trade-proof', method: 'getTransaction', params: [signature, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }] }),
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (response.ok) {
+        const body = await response.json<{ result?: ParsedTransaction | null }>()
+        if (body.result) return body.result
+      }
+    } catch {
+      // Transient RPC problem (timeout, rate limit, network). Treat as "not ready
+      // yet" and retry — never throw, or a valid trade becomes a 500.
+    }
+    if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1800))
   }
   return null
 }
