@@ -52,6 +52,9 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .zero-fee-banner i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: fee-pulse 1.6s ease-in-out infinite; }
 .zero-fee-banner strong { font-size: 9px; font-weight: 900; letter-spacing: .08em; }
 .zero-fee-banner span { color: #526e9b; font-size: 7px; font-weight: 750; letter-spacing: .05em; }
+.seeker-banner { min-height: 34px; padding: 8px 16px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 12px; background: #0a0a0a; color: #fff; text-align: center; }
+.seeker-banner strong { font-size: 10px; font-weight: 900; letter-spacing: .09em; }
+.seeker-banner span { color: #9aa4b2; font-size: 8px; font-weight: 800; letter-spacing: .06em; }
 
 @keyframes fee-pulse {
   0%, 100% { opacity: .25; transform: scale(.75); }

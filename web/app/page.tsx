@@ -536,6 +536,11 @@ export default function Home() {
         </div>
       </header>
 
+      <div className="seeker-banner" aria-label="HeyStockers is on the Solana dApp Store. Search HeyStockers on your Solana Seeker to install it.">
+        <strong>NOW ON THE SOLANA dApp STORE</strong>
+        <span>SEARCH &ldquo;HEYSTOCKERS&rdquo; ON YOUR SEEKER TO INSTALL</span>
+      </div>
+
       <div className="zero-fee-banner" aria-label="Launch offer: zero percent HeyStockers platform fee. Network and market costs may apply.">
         <i aria-hidden="true" />
         <strong>0% HEYSTOCKERS FEE</strong>
