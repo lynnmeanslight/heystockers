@@ -104,6 +104,27 @@ export function getFeed(viewer = '') {
   return request<{ calls: PositionCall[] }>(`/api/social/feed${query}`)
 }
 
+export type TradeRecord = {
+  signature: string
+  symbol: string
+  side: 'BUY' | 'SELL'
+  assetAtomic: string
+  usdcAtomic: string
+  priceUsd: number | null
+  blockTime: string | null
+}
+
+export async function getTradeHistory(wallet: string) {
+  return (await request<{ trades: TradeRecord[] }>(`/api/trades/history?wallet=${encodeURIComponent(wallet)}`)).trades
+}
+
+export function recordTrade(wallet: string, signature: string) {
+  return request<{ recorded: boolean; duplicate?: boolean }>('/api/trades/record', {
+    method: 'POST',
+    body: JSON.stringify({ wallet, signature }),
+  })
+}
+
 export async function getProfile(wallet: string, viewer = '') {
   const query = new URLSearchParams({ wallet, ...(viewer ? { viewer } : {}) }).toString()
   return (await request<{ profile: UserProfile | null }>(`/api/profiles/by-wallet?${query}`)).profile

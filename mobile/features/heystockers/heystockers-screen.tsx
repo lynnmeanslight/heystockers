@@ -23,6 +23,8 @@ import {
   getPortfolio,
   getProfile,
   getQuotes,
+  getTradeHistory,
+  recordTrade,
   saveProfile,
   searchProfiles,
   toggleFollow,
@@ -71,6 +73,26 @@ function callStatus(call: PositionCall) {
   return call.outcome
 }
 
+function shortDate(value: string) {
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(value))
+}
+
+function formatSignedUsd(value: number) {
+  const safe = Math.abs(value) < 0.005 ? 0 : value
+  const sign = safe > 0 ? '+' : safe < 0 ? '-' : ''
+  return `${sign}${formatUsd(Math.abs(safe))}`
+}
+
+// Staked P&L per call: the USDC commitment moved by entry -> current price.
+function callPnl(call: PositionCall) {
+  if (call.currentPrice === null || call.entryPrice <= 0) return null
+  const move =
+    call.side === 'BUY'
+      ? call.currentPrice / call.entryPrice - 1
+      : (call.entryPrice - call.currentPrice) / call.entryPrice
+  return call.commitmentUsdc * move
+}
+
 export function HeyStockersScreen() {
   const { account, connect, disconnect, signMessages } = useMobileWallet()
   const queryClient = useQueryClient()
@@ -83,6 +105,7 @@ export function HeyStockersScreen() {
   const [pendingProof, setPendingProof] = useState<PendingProof | null>(null)
   const [proofBusy, setProofBusy] = useState(false)
   const [marketExpanded, setMarketExpanded] = useState(false)
+  const [portfolioView, setPortfolioView] = useState<'holdings' | 'history'>('holdings')
   const [guideOpen, setGuideOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [peopleQuery, setPeopleQuery] = useState('')
@@ -124,6 +147,14 @@ export function HeyStockersScreen() {
     queryFn: () => getProfile(wallet, wallet),
     enabled: Boolean(wallet),
     staleTime: 30_000,
+    retry: 1,
+  })
+  const tradeHistory = useQuery({
+    queryKey: ['trade-history', wallet],
+    queryFn: () => getTradeHistory(wallet),
+    enabled: Boolean(wallet),
+    staleTime: 15_000,
+    refetchInterval: wallet ? 60_000 : false,
     retry: 1,
   })
   const normalizedPeopleQuery = peopleQuery.trim().replace(/^@/, '')
@@ -280,9 +311,25 @@ export function HeyStockersScreen() {
     }
   }
 
+  async function recordSwap(activeWallet: string, signature: string) {
+    // Give the swap time to confirm, then persist it to on-chain trade history.
+    for (const delay of [2_500, 6_000, 10_000]) {
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      try {
+        await recordTrade(activeWallet, signature)
+        await queryClient.invalidateQueries({ queryKey: ['trade-history'] })
+        return
+      } catch (error) {
+        // 409 means the trade is not confirmed yet; keep retrying. Anything else is terminal.
+        if (!(error instanceof ApiError) || error.status !== 409) return
+      }
+    }
+  }
+
   async function tradeExecuted(signature: string) {
     setBanner('Trade submitted.')
     await queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+    if (wallet) void recordSwap(wallet, signature)
     if (!trade.call || !wallet) return
     const proof = { call: trade.call, signature }
     setPendingProof(proof)
@@ -353,6 +400,14 @@ export function HeyStockersScreen() {
   const calls = feed.data?.calls ?? []
   const stockHoldings = portfolio.data?.holdings.filter((holding) => holding.symbol !== 'USDC') ?? []
   const refreshing = quotes.isRefetching || feed.isRefetching || portfolio.isRefetching
+  const myCalls = useMemo(() => (wallet ? calls.filter((call) => call.wallet === wallet) : []), [calls, wallet])
+  const myRecord = myCalls[0]?.record ?? { wins: 0, losses: 0 }
+  const myWinRate =
+    myRecord.wins + myRecord.losses > 0 ? Math.round((myRecord.wins / (myRecord.wins + myRecord.losses)) * 100) : null
+  const myCallsPnl = useMemo(() => {
+    const known = myCalls.map(callPnl).filter((value): value is number => value !== null)
+    return known.length ? known.reduce((sum, value) => sum + value, 0) : null
+  }, [myCalls])
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -550,30 +605,144 @@ export function HeyStockersScreen() {
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Portfolio</Text>
-          <Text style={styles.muted}>{stockHoldings.length || ''}</Text>
+          <Text style={styles.muted}>
+            {portfolioView === 'holdings' ? stockHoldings.length || '' : tradeHistory.data?.length || ''}
+          </Text>
         </View>
-        {!wallet ? <Text style={styles.empty}>Connect your wallet to see the stocks it actually owns.</Text> : null}
-        {wallet && portfolio.isLoading ? <ActivityIndicator color={COLORS.accent} style={styles.loader} /> : null}
-        {wallet && portfolio.isError ? (
-          <Text style={styles.empty}>Portfolio unavailable. Pull down to retry.</Text>
-        ) : null}
-        {wallet && portfolio.isSuccess && stockHoldings.length === 0 ? (
-          <Text style={styles.empty}>No supported stocks in this wallet.</Text>
-        ) : null}
-        {stockHoldings.map((holding) => (
+        <View accessibilityRole="tablist" style={styles.subSwitch}>
           <Pressable
-            accessibilityRole="button"
-            key={holding.symbol}
-            onPress={() => setTrade({ open: true, symbol: holding.symbol, side: 'sell' })}
-            style={styles.holdingRow}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: portfolioView === 'holdings' }}
+            onPress={() => setPortfolioView('holdings')}
+            style={[styles.subTab, portfolioView === 'holdings' && styles.subTabActive]}
           >
-            <Text style={styles.stockSymbol}>{holding.symbol}</Text>
-            <Text style={styles.holdingAmount}>
-              {holding.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })}
-            </Text>
-            <Text style={styles.holdingValue}>{formatUsd(holding.valueUsd)}</Text>
+            <Text style={portfolioView === 'holdings' ? styles.subTabTextActive : styles.subTabText}>HOLDINGS</Text>
           </Pressable>
-        ))}
+          <Pressable
+            accessibilityRole="tab"
+            accessibilityState={{ selected: portfolioView === 'history' }}
+            onPress={() => setPortfolioView('history')}
+            style={[styles.subTab, portfolioView === 'history' && styles.subTabActive]}
+          >
+            <Text style={portfolioView === 'history' ? styles.subTabTextActive : styles.subTabText}>HISTORY</Text>
+          </Pressable>
+        </View>
+
+        {portfolioView === 'holdings' ? (
+          <>
+            {!wallet ? <Text style={styles.empty}>Connect your wallet to see the stocks it actually owns.</Text> : null}
+            {wallet && portfolio.isLoading ? <ActivityIndicator color={COLORS.accent} style={styles.loader} /> : null}
+            {wallet && portfolio.isError ? (
+              <Text style={styles.empty}>Portfolio unavailable. Pull down to retry.</Text>
+            ) : null}
+            {wallet && portfolio.isSuccess && stockHoldings.length === 0 ? (
+              <Text style={styles.empty}>No supported stocks in this wallet.</Text>
+            ) : null}
+            {stockHoldings.map((holding) => (
+              <Pressable
+                accessibilityRole="button"
+                key={holding.symbol}
+                onPress={() => setTrade({ open: true, symbol: holding.symbol, side: 'sell' })}
+                style={styles.holdingRow}
+              >
+                <Text style={styles.stockSymbol}>{holding.symbol}</Text>
+                <Text style={styles.holdingAmount}>
+                  {holding.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })}
+                </Text>
+                <Text style={styles.holdingValue}>{formatUsd(holding.valueUsd)}</Text>
+              </Pressable>
+            ))}
+          </>
+        ) : null}
+
+        {portfolioView === 'history' ? (
+          !wallet ? (
+            <Text style={styles.empty}>Connect your wallet to see your trades and calls.</Text>
+          ) : (
+            <>
+              <Text style={styles.historyLabel}>ON-CHAIN TRADES</Text>
+              {tradeHistory.isLoading ? <ActivityIndicator color={COLORS.accent} style={styles.loader} /> : null}
+              {tradeHistory.isError ? (
+                <Text style={styles.empty}>Trade history unavailable. Pull down to retry.</Text>
+              ) : null}
+              {tradeHistory.isSuccess && (tradeHistory.data?.length ?? 0) === 0 ? (
+                <Text style={styles.empty}>
+                  No recorded trades yet. New trades appear here once they confirm on-chain.
+                </Text>
+              ) : null}
+              {(tradeHistory.data ?? []).map((record) => {
+                const asset = getAsset(record.symbol)
+                const shares = Number(record.assetAtomic) / 10 ** asset.decimals
+                const usd = Number(record.usdcAtomic) / 1_000_000
+                return (
+                  <View key={record.signature} style={styles.historyRow}>
+                    <View style={styles.historyLeadWrap}>
+                      <Text style={styles.historyLead}>
+                        {record.side === 'BUY' ? 'Bought' : 'Sold'} {record.symbol}
+                      </Text>
+                      <Text style={styles.muted}>
+                        {shares.toLocaleString('en-US', { maximumFractionDigits: 4 })} shares
+                        {record.priceUsd ? ` · at ${formatUsd(record.priceUsd)}` : ''}
+                        {record.blockTime ? ` · ${shortDate(record.blockTime)}` : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.historyRight}>
+                      <Text style={styles.holdingValue}>{formatUsd(usd)}</Text>
+                      <Text style={[styles.historyTag, { color: record.side === 'BUY' ? COLORS.buy : COLORS.sell }]}>
+                        {record.side}
+                      </Text>
+                    </View>
+                  </View>
+                )
+              })}
+
+              <Text style={styles.historyLabel}>POSITION CALLS</Text>
+              <View style={styles.trackRow}>
+                <Text style={styles.muted}>Your track record</Text>
+                <Text style={styles.trackValue}>
+                  {myRecord.wins}W · {myRecord.losses}L{myWinRate !== null ? ` · ${myWinRate}% win` : ''}
+                </Text>
+              </View>
+              {myCallsPnl !== null ? (
+                <View style={styles.trackRow}>
+                  <Text style={styles.muted}>Staked P&L across calls</Text>
+                  <Text style={[styles.trackValue, { color: myCallsPnl >= 0 ? COLORS.buy : COLORS.sell }]}>
+                    {formatSignedUsd(myCallsPnl)}
+                  </Text>
+                </View>
+              ) : null}
+              {myCalls.length === 0 ? (
+                <Text style={styles.empty}>You haven&apos;t made any calls yet. Tap Make a call below.</Text>
+              ) : null}
+              {myCalls.map((call) => {
+                const pnl = callPnl(call)
+                return (
+                  <View key={call.id} style={styles.historyRow}>
+                    <View style={styles.historyLeadWrap}>
+                      <Text style={styles.historyLead}>
+                        {call.side === 'BUY' ? 'Buy' : 'Sell'} {call.symbol}
+                      </Text>
+                      <Text style={styles.muted}>
+                        Target {formatUsd(call.targetPrice)} ·{' '}
+                        {call.outcome === 'OPEN' ? `open · ${shortDate(call.deadline)}` : 'closed'}
+                      </Text>
+                    </View>
+                    <View style={styles.historyRight}>
+                      {pnl !== null ? (
+                        <Text style={[styles.holdingValue, { color: pnl >= 0 ? COLORS.buy : COLORS.sell }]}>
+                          {formatSignedUsd(pnl)}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.historyTag}>
+                        {call.outcome === 'OPEN' ? 'LIVE' : call.outcome === 'WON' ? 'HIT' : 'MISSED'}
+                      </Text>
+                    </View>
+                  </View>
+                )
+              })}
+            </>
+          )
+        ) : null}
 
         <View style={styles.sectionHeader}>
           <View>
@@ -835,4 +1004,31 @@ const styles = StyleSheet.create({
   zeroFeeDot: { backgroundColor: COLORS.accent, borderRadius: 3, height: 6, width: 6 },
   zeroFeeNote: { color: '#526E9B', fontSize: 6, fontWeight: '800', letterSpacing: 0.4 },
   zeroFeeText: { color: COLORS.accent, fontSize: 9, fontWeight: '900', letterSpacing: 0.7 },
+  subSwitch: { flexDirection: 'row', gap: 18, marginTop: 14 },
+  subTab: { borderBottomColor: 'transparent', borderBottomWidth: 2, paddingBottom: 8 },
+  subTabActive: { borderBottomColor: COLORS.accent },
+  subTabText: { color: COLORS.muted, fontSize: 11, fontWeight: '800', letterSpacing: 0.6 },
+  subTabTextActive: { color: COLORS.text, fontSize: 11, fontWeight: '900', letterSpacing: 0.6 },
+  historyLabel: {
+    color: COLORS.muted,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginBottom: 2,
+    marginTop: 22,
+  },
+  historyRow: {
+    alignItems: 'center',
+    borderBottomColor: COLORS.line,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+  },
+  historyLeadWrap: { flex: 1, paddingRight: 12 },
+  historyLead: { color: COLORS.text, fontSize: 13, fontWeight: '800' },
+  historyRight: { alignItems: 'flex-end', gap: 3 },
+  historyTag: { color: COLORS.muted, fontSize: 9, fontWeight: '900', letterSpacing: 0.6 },
+  trackRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10 },
+  trackValue: { color: COLORS.text, fontSize: 13, fontWeight: '800' },
 })

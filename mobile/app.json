@@ -28,8 +28,17 @@
         {
           "action": "VIEW",
           "autoVerify": true,
-          "data": [{ "scheme": "https", "host": "heystockers.trade", "pathPrefix": "/" }],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "data": [
+            {
+              "scheme": "https",
+              "host": "heystockers.trade",
+              "pathPrefix": "/"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -57,6 +66,13 @@
     "experiments": {
       "reactCompiler": true,
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d5e00edd-efd8-4b79-b8d3-c5584d26ecb6"
+      }
+    },
+    "owner": "nyilynnhtwe"
   }
 }
