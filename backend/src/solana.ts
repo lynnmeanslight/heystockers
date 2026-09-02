@@ -76,11 +76,15 @@ export async function getPortfolio(env: Bindings, wallet: string, options: { fre
     const priceUsd = asset.symbol === 'USDC' ? 1 : prices[asset.symbol] ?? null
     return { symbol: asset.symbol, name: asset.name, amount, priceUsd, valueUsd: priceUsd === null ? null : amount * priceUsd }
   }).sort((a, b) => (b.valueUsd ?? -1) - (a.valueUsd ?? -1))
+  // Hide untradeable dust from the list, but keep it in the total so the value
+  // still matches the wallet. USDC and not-yet-priced holdings (a real position
+  // we cannot value right now) always stay visible.
+  const DUST_USD = 0.01
   const payload = {
     wallet,
     stockValueUsd: holdings.filter((holding) => holding.symbol !== 'USDC').reduce((sum, holding) => sum + (holding.valueUsd ?? 0), 0),
     usdcValueUsd: holdings.find((holding) => holding.symbol === 'USDC')?.valueUsd ?? 0,
-    holdings,
+    holdings: holdings.filter((holding) => holding.symbol === 'USDC' || holding.valueUsd === null || holding.valueUsd >= DUST_USD),
     prices,
     updatedAt: new Date().toISOString(),
     source: 'Token accounts and Solana market activity',
